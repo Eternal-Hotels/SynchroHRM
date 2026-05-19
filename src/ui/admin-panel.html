@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Synchro HRM</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow">Eternal Hotels | Mailbox Ingestion Console</div>
+        <h1>Synchro HRM Console</h1>
+        <p class="subhead">Monitor the auditor mailbox, run PDF ingestion on demand, and download normalized CSV exports for downstream NetSuite work.</p>
+      </div>
+      <div class="user-pill visible">
+        <div class="hero-actions">
+          <button id="refresh-button" class="secondary">Refresh</button>
+          <button id="run-button" class="primary">Run Inbox Sync</button>
+        </div>
+        <div id="hero-status" class="hero-status">Loading dashboard...</div>
+      </div>
+    </section>
+
+    <section class="app-layout">
+      <aside class="side-nav panel">
+        <div class="side-nav-head">
+          <h2>Console</h2>
+          <p class="subhead">Synchro ERM styling, retargeted for HRM mailbox processing.</p>
+        </div>
+        <nav class="side-tabs">
+          <a class="tab-link" href="#overview">Overview</a>
+          <a class="tab-link" href="#properties">Properties</a>
+          <a class="tab-link" href="#latest-run">Latest Run</a>
+          <a class="tab-link" href="#exports">Exports</a>
+          <a class="tab-link" href="#scope">Scope</a>
+        </nav>
+      </aside>
+
+      <div class="app-main">
+        <section id="overview" class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow muted">Runtime</div>
+              <h2>Service Overview</h2>
+            </div>
+            <div id="overview-stamp" class="badge">Waiting for data</div>
+          </div>
+          <div id="overview-grid" class="stat-grid"></div>
+        </section>
+
+        <section id="properties" class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow muted">Portfolio</div>
+              <h2>Properties</h2>
+            </div>
+            <div class="badge">Foldered by attachment headers</div>
+          </div>
+          <div id="property-list" class="card-grid"></div>
+        </section>
+
+        <section id="latest-run" class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow muted">Operations</div>
+              <h2>Latest Run</h2>
+            </div>
+            <div id="latest-run-badge" class="badge">No runs yet</div>
+          </div>
+          <div id="run-summary-grid" class="metric-grid"></div>
+          <div class="panel-body">
+            <div id="run-notes" class="notes-block empty">No run notes yet.</div>
+            <div id="attachment-list" class="list-grid"></div>
+          </div>
+        </section>
+
+        <section id="exports" class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow muted">Output</div>
+              <h2>CSV Exports</h2>
+            </div>
+          </div>
+          <div id="export-list" class="card-grid"></div>
+        </section>
+
+        <section id="scope" class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow muted">Current Scope</div>
+              <h2>What This Interface Covers</h2>
+            </div>
+          </div>
+          <div class="panel-body scope-grid">
+            <div class="scope-card">
+              <strong>Mailbox polling</strong>
+              <p>App-only Microsoft Graph access against the `Inbox` for `auditor@eternalhotels.com` with incremental delta sync.</p>
+            </div>
+            <div class="scope-card">
+              <strong>Parsing behavior</strong>
+              <p>PDF report families are parsed into staging tables and CSVs. XLSX attachments are archived and tracked, but intentionally deferred in v1.</p>
+            </div>
+            <div class="scope-card">
+              <strong>Operational storage</strong>
+              <p>Raw attachments, parsed JSON, SQLite state, and latest CSV exports all stay under the local `storage` directory for auditability.</p>
+            </div>
+            <div class="scope-card">
+              <strong>Next lifecycle step</strong>
+              <p>The generated CSVs are staging outputs for a later NetSuite REST integration, not final NetSuite payloads yet.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div id="property-modal" class="modal-shell hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="1"></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="property-modal-title">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow muted">Property Reports</div>
+          <h2 id="property-modal-title">Loading property...</h2>
+          <p id="property-modal-subhead" class="subhead">Preparing property detail.</p>
+        </div>
+        <button id="property-modal-close" class="secondary modal-close" type="button">Close</button>
+      </div>
+      <div class="modal-body">
+        <div id="property-modal-summary" class="metric-grid"></div>
+        <div class="modal-section">
+          <div class="modal-section-head">
+            <h3>Edit Property</h3>
+          </div>
+          <form id="property-edit-form" class="property-form">
+            <label class="form-field">
+              <span>Property name</span>
+              <input id="property-name-input" name="propertyName" type="text" placeholder="Red Lion Hotel Pasco Airport & Conference Center" required>
+            </label>
+            <label class="form-field">
+              <span>Folder slug</span>
+              <input id="property-slug-input" name="propertySlug" type="text" placeholder="Leave blank to generate from the property name">
+            </label>
+            <div class="form-help">Saving this updates the property label in the dashboard and keeps the property folders aligned under `storage`.</div>
+            <div class="toolbar-row">
+              <button id="property-save-button" class="primary" type="submit">Save Property</button>
+            </div>
+            <div id="property-form-status" class="form-status empty">No pending edits.</div>
+          </form>
+        </div>
+        <div class="modal-section">
+          <div class="modal-section-head">
+            <h3>CSV Exports</h3>
+          </div>
+          <div id="property-modal-exports" class="card-grid"></div>
+        </div>
+        <div class="modal-section">
+          <div class="modal-section-head">
+            <h3>Reports</h3>
+          </div>
+          <div id="property-modal-attachments" class="list-grid"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

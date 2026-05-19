@@ -1,0 +1,9 @@
+.env
+node_modules/
+dist/
+storage/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+coverage/
+tests/fixtures/generated/

@@ -1,0 +1,78 @@
+{
+  "AR Detailed Aging.PDF": {
+    "reportType": "ar_detailed_aging_rows",
+    "rowCount": 178,
+    "firstRow": {
+      "account_name": "Corporate Lodging Consultant CO0509",
+      "guest_name": "Spencer, David",
+      "invoice_no": "227",
+      "folio_no": "886",
+      "post_date": "2026-04-10"
+    }
+  },
+  "History and Forecast June.PDF": {
+    "reportType": "history_forecast_rows",
+    "rowCount": 30,
+    "firstRow": {
+      "business_date": "2026-06-01",
+      "section": "Forecast",
+      "day_of_week": "Mon",
+      "ooo_rooms": "6",
+      "in_house_people": "32"
+    }
+  },
+  "History and Forecast May.PDF": {
+    "reportType": "history_forecast_rows",
+    "rowCount": 31,
+    "firstRow": {
+      "business_date": "2026-05-01",
+      "section": "History",
+      "day_of_week": "Fri",
+      "no_show_rooms": "3",
+      "ooo_rooms": "19",
+      "in_house_people": "313"
+    }
+  },
+  "Manager Flash Last Day.PDF": {
+    "reportType": "manager_flash_metric_rows",
+    "rowCount": 279,
+    "firstRow": {
+      "metric_name": "Total Rooms in Hotel",
+      "period": "day",
+      "metric_value": "279"
+    }
+  },
+  "Rate Change Report.PDF": {
+    "reportType": "rate_change_rows",
+    "rowCount": 2,
+    "firstRow": {
+      "confirmation_no": "177120038",
+      "guest_name": "Jones,Courtney",
+      "account_kind": "C",
+      "company_or_agent": "Sonesta Travel Pas",
+      "changed_at": "2026-05-18T14:45:00"
+    }
+  },
+  "Reservations Made Yesterday.PDF": {
+    "reportType": "reservations_made_yesterday_rows",
+    "rowCount": 115,
+    "firstRow": {
+      "guest_name": "Jacobson,Jessica",
+      "arrival_date": "2026-05-23",
+      "departure_date": "2026-05-24",
+      "rate_code": "EX1",
+      "company_group_note": "Expedia"
+    }
+  },
+  "Zero Rate Rooms.PDF": {
+    "reportType": "zero_rate_room_rows",
+    "rowCount": 29,
+    "firstRow": {
+      "room_account_no": "8000",
+      "guest_or_group_name": "No Host - May",
+      "market_code": "HS",
+      "payment_method": "CA",
+      "tax_code": "00"
+    }
+  }
+}
