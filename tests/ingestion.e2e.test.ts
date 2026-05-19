@@ -25,12 +25,16 @@ test("example data ingests end to end into storage, sqlite, and csv exports", as
     assert.equal(firstRun.summary.attachmentsDeferred, 1);
     assert.equal(firstRun.summary.attachmentsFailed, 0);
 
-    const historyExport = firstRun.exports.find((entry) => entry.reportType === "history_forecast_rows");
+    const historyExport = firstRun.exports.find((entry) => (
+      entry.reportType === "history_forecast_rows"
+      && entry.propertySlug === "red-lion-hotel-pasco-airport-and-conference-center"
+    ));
     assert.ok(historyExport);
     assert.equal(historyExport.rowCount, 61);
     const latestCsv = await readFile(historyExport.latestPath, "utf8");
-    assert.match(latestCsv, /property_name,property_slug,report_type/);
-    assert.match(latestCsv, /business_date,section,day_of_week/);
+    assert.match(latestCsv, /^business_date,section,day_of_week/m);
+    assert.doesNotMatch(latestCsv, /attachment_name|property_name|property_slug|report_type|report_title|report_date|ingest_run_id/);
+    assert.equal(database.getLatestExport("history_forecast_rows"), null);
 
     const runRecord = database.getRun(firstRun.runId);
     assert.ok(runRecord);
@@ -69,14 +73,10 @@ test("example data ingests end to end into storage, sqlite, and csv exports", as
     assert.ok(renamedPropertyExport);
     assert.ok(String(renamedPropertyExport.latest_path).includes(path.join("properties", "eternal-pasco-test-hotel")));
     const renamedPropertyCsv = await readFile(String(renamedPropertyExport.latest_path), "utf8");
-    assert.match(renamedPropertyCsv, /Eternal Pasco Test Hotel/);
-    assert.match(renamedPropertyCsv, /eternal-pasco-test-hotel/);
+    assert.match(renamedPropertyCsv, /^business_date,section,day_of_week/m);
+    assert.doesNotMatch(renamedPropertyCsv, /attachment_name|property_name|property_slug|report_type|report_title|report_date|ingest_run_id/);
 
-    const refreshedGlobalExport = database.getLatestExport("history_forecast_rows");
-    assert.ok(refreshedGlobalExport);
-    const refreshedGlobalCsv = await readFile(String(refreshedGlobalExport.latest_path), "utf8");
-    assert.match(refreshedGlobalCsv, /Eternal Pasco Test Hotel/);
-    assert.match(refreshedGlobalCsv, /eternal-pasco-test-hotel/);
+    assert.equal(database.getLatestExport("history_forecast_rows"), null);
 
     const secondRun = await service.run("test");
     assert.equal(secondRun.status, "completed");

@@ -18,7 +18,6 @@ const latestRunBadge = document.getElementById("latest-run-badge");
 const runSummaryGrid = document.getElementById("run-summary-grid");
 const runNotes = document.getElementById("run-notes");
 const attachmentList = document.getElementById("attachment-list");
-const exportList = document.getElementById("export-list");
 const propertyModal = document.getElementById("property-modal");
 const propertyModalClose = document.getElementById("property-modal-close");
 const propertyModalTitle = document.getElementById("property-modal-title");
@@ -192,7 +191,6 @@ function render() {
   renderOverview();
   renderProperties();
   renderLatestRun();
-  renderExports();
   renderPropertyModal();
 }
 
@@ -314,37 +312,6 @@ function renderLatestRun() {
       </div>
     </article>
   `).join("");
-}
-
-function renderExports() {
-  if (!state.dashboard) {
-    exportList.innerHTML = "";
-    return;
-  }
-
-  exportList.innerHTML = state.dashboard.reports.map((report) => {
-    const latest = report.latestExport;
-    const downloadHref = latest ? `/api/exports/${encodeURIComponent(report.reportType)}/latest?download=1` : "";
-
-    return `
-      <article class="export-card">
-        <div class="export-top">
-          <div>
-            <strong>${escapeHtml(report.title)}</strong>
-            <div class="export-meta">
-              <span><code>${escapeHtml(report.reportType)}</code></span>
-              <span>${latest ? `Latest rows: ${escapeHtml(String(latest.row_count))}` : "No CSV generated yet"}</span>
-              <span>${latest ? `Updated: ${escapeHtml(formatDateTime(latest.created_at))}` : "Run a sync to generate the first export."}</span>
-            </div>
-          </div>
-          ${latest ? `<span class="status-chip parsed">ready</span>` : `<span class="status-chip deferred">pending</span>`}
-        </div>
-        <div class="toolbar-row">
-          ${latest ? `<a class="export-link" href="${downloadHref}">Download Latest CSV</a>` : ""}
-        </div>
-      </article>
-    `;
-  }).join("");
 }
 
 function renderPropertyModal() {

@@ -46,12 +46,7 @@ export function createApp(
       pollCron: config.pollCron,
       dataDir: config.dataDir,
       latestRun: database.getLatestRun(),
-      properties: database.getPropertySummaries(),
-      reports: REPORT_TYPES.map((reportType) => ({
-        reportType,
-        title: REPORT_TITLES[reportType],
-        latestExport: ingestionService.getLatestExport(reportType)
-      }))
+      properties: database.getPropertySummaries()
     });
   });
 
@@ -125,27 +120,6 @@ export function createApp(
       const message = error instanceof Error ? error.message : String(error);
       response.status(error instanceof PropertyUpdateError ? 400 : 500).json({ error: message });
     }
-  });
-
-  app.get("/api/exports/:reportType/latest", (request, response) => {
-    const reportType = request.params.reportType;
-    if (!REPORT_TYPES.includes(reportType as (typeof REPORT_TYPES)[number])) {
-      response.status(400).json({ error: `Unknown report type: ${reportType}` });
-      return;
-    }
-
-    const latest = ingestionService.getLatestExport(reportType as (typeof REPORT_TYPES)[number]);
-    if (!latest || typeof latest.latest_path !== "string") {
-      response.status(404).json({ error: `No export exists yet for ${reportType}.` });
-      return;
-    }
-
-    if (request.query.download === "1") {
-      response.download(latest.latest_path, `${reportType}-latest.csv`);
-      return;
-    }
-
-    response.json(latest);
   });
 
   app.get("/api/properties/:propertySlug/exports/:reportType/latest", (request, response) => {

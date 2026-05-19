@@ -2,7 +2,7 @@ import path from "node:path";
 import { REPORT_TYPES } from "../types.js";
 import type { AppDatabase } from "../db/Database.js";
 import type { ExportFileInfo, ReportType } from "../types.js";
-import { REPORT_COLUMN_MAP } from "../reports.js";
+import { REPORT_EXPORT_COLUMN_MAP } from "../reports.js";
 import { toCsv } from "../utils/csv.js";
 import { formatRunStamp } from "../utils/dates.js";
 import { ensureDir, writeTextFile } from "../utils/files.js";
@@ -28,29 +28,6 @@ export class ExportService {
     }));
 
     for (const reportType of REPORT_TYPES) {
-      const runRows = this.database.getExportRows(reportType, { runId });
-      const allRows = this.database.getExportRows(reportType);
-      const reportDir = path.join(this.exportDir, reportType);
-      await ensureDir(reportDir);
-
-      const csvPath = path.join(reportDir, `${stamp}.csv`);
-      const latestPath = path.join(reportDir, "latest.csv");
-      await writeTextFile(csvPath, toCsv(runRows, REPORT_COLUMN_MAP[reportType]));
-      await writeTextFile(latestPath, toCsv(allRows, REPORT_COLUMN_MAP[reportType]));
-      this.database.recordExport(runId, reportType, runRows.length, csvPath, latestPath, {
-        propertyName: null,
-        propertySlug: null
-      });
-
-      outputs.push({
-        reportType,
-        propertyName: null,
-        propertySlug: null,
-        csvPath,
-        latestPath,
-        rowCount: runRows.length
-      });
-
       for (const property of properties) {
         const propertyRunRows = this.database.getExportRows(reportType, { runId, propertySlug: property.propertySlug });
         const propertyAllRows = this.database.getExportRows(reportType, { propertySlug: property.propertySlug });
@@ -59,8 +36,8 @@ export class ExportService {
 
         const propertyCsvPath = path.join(propertyDir, `${stamp}.csv`);
         const propertyLatestPath = path.join(propertyDir, "latest.csv");
-        await writeTextFile(propertyCsvPath, toCsv(propertyRunRows, REPORT_COLUMN_MAP[reportType]));
-        await writeTextFile(propertyLatestPath, toCsv(propertyAllRows, REPORT_COLUMN_MAP[reportType]));
+        await writeTextFile(propertyCsvPath, toCsv(propertyRunRows, REPORT_EXPORT_COLUMN_MAP[reportType]));
+        await writeTextFile(propertyLatestPath, toCsv(propertyAllRows, REPORT_EXPORT_COLUMN_MAP[reportType]));
         this.database.recordExport(runId, reportType, propertyRunRows.length, propertyCsvPath, propertyLatestPath, property);
 
         outputs.push({
@@ -83,25 +60,23 @@ export class ExportService {
 
   async refreshLatestExports(propertySlug?: string | null): Promise<void> {
     await ensureDir(this.exportDir);
+    const properties = propertySlug
+      ? [ensurePropertyRef({ propertyName: null, propertySlug })]
+      : this.database.getPropertySummaries().map((row) => ensurePropertyRef({
+          propertyName: (row.property_name as string | null | undefined) ?? null,
+          propertySlug: (row.property_slug as string | null | undefined) ?? null
+        }));
 
     for (const reportType of REPORT_TYPES) {
-      const globalLatest = this.database.getLatestExport(reportType);
-      if (globalLatest && typeof globalLatest.latest_path === "string") {
-        await writeTextFile(
-          globalLatest.latest_path,
-          toCsv(this.database.getExportRows(reportType), REPORT_COLUMN_MAP[reportType])
-        );
-      }
+      for (const property of properties) {
+        const propertyLatest = this.database.getLatestExport(reportType, property.propertySlug);
+        if (!propertyLatest || typeof propertyLatest.latest_path !== "string") {
+          continue;
+        }
 
-      if (!propertySlug) {
-        continue;
-      }
-
-      const propertyLatest = this.database.getLatestExport(reportType, propertySlug);
-      if (propertyLatest && typeof propertyLatest.latest_path === "string") {
         await writeTextFile(
           propertyLatest.latest_path,
-          toCsv(this.database.getExportRows(reportType, { propertySlug }), REPORT_COLUMN_MAP[reportType])
+          toCsv(this.database.getExportRows(reportType, { propertySlug: property.propertySlug }), REPORT_EXPORT_COLUMN_MAP[reportType])
         );
       }
     }
