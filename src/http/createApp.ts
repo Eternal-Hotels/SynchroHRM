@@ -3,8 +3,9 @@ import path from "node:path";
 import type { AppConfig } from "../config.js";
 import { REPORT_TYPES } from "../types.js";
 import type { AppDatabase } from "../db/Database.js";
-import { PropertyUpdateError, type IngestionService } from "../services/IngestionService.js";
-import { REPORT_TITLES } from "../reports.js";
+import { AttachmentRetryError, PropertyUpdateError, type IngestionService } from "../services/IngestionService.js";
+import { REPORT_COLUMN_MAP, REPORT_TITLES } from "../reports.js";
+import { toCsv } from "../utils/csv.js";
 
 export function createApp(
   config: AppConfig,
@@ -168,6 +169,109 @@ export function createApp(
     }
 
     response.json(latest);
+  });
+
+  app.get("/api/attachments/:attachmentId/file", (request, response) => {
+    const attachmentId = Number(request.params.attachmentId);
+    if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+      response.status(400).json({ error: "attachmentId must be a positive integer." });
+      return;
+    }
+
+    const attachment = database.getAttachmentById(attachmentId);
+    if (!attachment || typeof attachment.archived_path !== "string") {
+      response.status(404).json({ error: `Attachment ${attachmentId} was not found.` });
+      return;
+    }
+
+    const attachmentName = typeof attachment.attachment_name === "string"
+      ? attachment.attachment_name
+      : `attachment-${attachmentId}`;
+    const absolutePath = path.resolve(attachment.archived_path);
+
+    if (request.query.download === "1") {
+      response.download(absolutePath, attachmentName);
+      return;
+    }
+
+    response.sendFile(absolutePath, (error) => {
+      if (error && !response.headersSent) {
+        const sendError = error as NodeJS.ErrnoException & { statusCode?: number; status?: number };
+        response.status(sendError.statusCode || sendError.status || 500).json({ error: sendError.message });
+      }
+    });
+  });
+
+  app.get("/api/attachments/:attachmentId/parsed-json", (request, response) => {
+    const attachmentId = Number(request.params.attachmentId);
+    if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+      response.status(400).json({ error: "attachmentId must be a positive integer." });
+      return;
+    }
+
+    const attachment = database.getAttachmentById(attachmentId);
+    if (!attachment || typeof attachment.parsed_json_path !== "string") {
+      response.status(404).json({ error: `Parsed JSON for attachment ${attachmentId} was not found.` });
+      return;
+    }
+
+    const absolutePath = path.resolve(attachment.parsed_json_path);
+    response.sendFile(absolutePath, (error) => {
+      if (error && !response.headersSent) {
+        const sendError = error as NodeJS.ErrnoException & { statusCode?: number; status?: number };
+        response.status(sendError.statusCode || sendError.status || 500).json({ error: sendError.message });
+      }
+    });
+  });
+
+  app.get("/api/attachments/:attachmentId/parsed-csv", (request, response) => {
+    const attachmentId = Number(request.params.attachmentId);
+    if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+      response.status(400).json({ error: "attachmentId must be a positive integer." });
+      return;
+    }
+
+    const attachment = database.getAttachmentById(attachmentId);
+    const reportType = typeof attachment?.report_type === "string" ? attachment.report_type : null;
+    if (!attachment || attachment.status !== "parsed" || !reportType || !REPORT_TYPES.includes(reportType as (typeof REPORT_TYPES)[number])) {
+      response.status(404).json({ error: `Parsed CSV for attachment ${attachmentId} was not found.` });
+      return;
+    }
+
+    const rows = database.getAttachmentExportRows(reportType as (typeof REPORT_TYPES)[number], attachmentId);
+    const attachmentName = typeof attachment.attachment_name === "string"
+      ? attachment.attachment_name.replace(/\.[^.]+$/, "")
+      : `attachment-${attachmentId}`;
+    const fileName = `${attachmentName}.csv`;
+
+    response.setHeader("content-type", "text/csv; charset=utf-8");
+    response.setHeader("content-disposition", `attachment; filename="${fileName.replace(/"/g, "")}"`);
+    response.send(toCsv(rows, REPORT_COLUMN_MAP[reportType as (typeof REPORT_TYPES)[number]]));
+  });
+
+  app.post("/api/attachments/:attachmentId/retry-parse", async (request, response) => {
+    const attachmentId = Number(request.params.attachmentId);
+    if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+      response.status(400).json({ error: "attachmentId must be a positive integer." });
+      return;
+    }
+
+    try {
+      const result = await ingestionService.retryAttachmentParse(attachmentId);
+      const propertyPayload = buildPropertyPayload(result.propertySlug, database, ingestionService);
+      if (!propertyPayload) {
+        response.status(500).json({ error: `Property ${result.propertySlug} could not be reloaded after retry.` });
+        return;
+      }
+
+      response.json({
+        ...result,
+        propertyPayload
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      response.status(error instanceof AttachmentRetryError ? 400 : 500).json({ error: message });
+    }
   });
 
   return app;

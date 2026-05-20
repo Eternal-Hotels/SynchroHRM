@@ -12,7 +12,7 @@
       <div class="hero-copy">
         <div class="eyebrow">Eternal Hotels | Mailbox Ingestion Console</div>
         <h1>Synchro HRM Console</h1>
-        <p class="subhead">Monitor the auditor mailbox, run PDF ingestion on demand, and download normalized CSV exports for downstream NetSuite work.</p>
+        <p class="subhead">Monitor the auditor mailbox and run PDF ingestion on demand.</p>
       </div>
       <div class="user-pill visible">
         <div class="hero-actions">
@@ -74,16 +74,6 @@
             <div id="run-notes" class="notes-block empty">No run notes yet.</div>
             <div id="attachment-list" class="list-grid"></div>
           </div>
-        </section>
-
-        <section id="exports" class="panel">
-          <div class="panel-head">
-            <div>
-              <div class="eyebrow muted">Output</div>
-              <h2>CSV Exports</h2>
-            </div>
-          </div>
-          <div id="export-list" class="card-grid"></div>
         </section>
 
         <section id="scope" class="panel">
@@ -151,15 +141,16 @@
         </div>
         <div class="modal-section">
           <div class="modal-section-head">
-            <h3>CSV Exports</h3>
-          </div>
-          <div id="property-modal-exports" class="card-grid"></div>
-        </div>
-        <div class="modal-section">
-          <div class="modal-section-head">
             <h3>Reports</h3>
+            <div id="property-history-caption" class="badge">Waiting for report history</div>
           </div>
-          <div id="property-modal-attachments" class="list-grid"></div>
+          <div class="report-browser">
+            <div id="property-history-browser" class="history-browser"></div>
+            <div class="history-detail">
+              <div id="property-history-selection" class="history-selection empty">Select a day to review the archived reports.</div>
+              <div id="property-modal-attachments" class="list-grid"></div>
+            </div>
+          </div>
         </div>
       </div>
     </section>

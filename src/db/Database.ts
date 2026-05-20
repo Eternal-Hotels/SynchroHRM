@@ -364,15 +364,15 @@ export class AppDatabase {
           updated_at = ?
       WHERE id = ?
     `).run(
-      input.status ?? current.status,
-      input.propertyName ?? current.property_name ?? null,
-      input.propertySlug ?? current.property_slug ?? null,
-      input.reportType ?? current.report_type ?? null,
-      input.reportTitle ?? current.report_title ?? null,
-      input.reportDate ?? current.report_date ?? null,
-      input.parseError ?? current.parse_error ?? null,
-      input.parsedJsonPath ?? current.parsed_json_path ?? null,
-      input.quarantinePath ?? current.quarantine_path ?? null,
+      pickAttachmentUpdateValue(input, "status", current.status),
+      pickAttachmentUpdateValue(input, "propertyName", current.property_name),
+      pickAttachmentUpdateValue(input, "propertySlug", current.property_slug),
+      pickAttachmentUpdateValue(input, "reportType", current.report_type),
+      pickAttachmentUpdateValue(input, "reportTitle", current.report_title),
+      pickAttachmentUpdateValue(input, "reportDate", current.report_date),
+      pickAttachmentUpdateValue(input, "parseError", current.parse_error),
+      pickAttachmentUpdateValue(input, "parsedJsonPath", current.parsed_json_path),
+      pickAttachmentUpdateValue(input, "quarantinePath", current.quarantine_path),
       Number(current.last_ingest_run_id),
       now,
       recordId
@@ -478,6 +478,16 @@ export class AppDatabase {
     return statement.all(...params) as Array<Record<string, unknown>>;
   }
 
+  getAttachmentExportRows(reportType: ReportType, attachmentRecordId: number): Array<Record<string, unknown>> {
+    const statement = this.db.prepare(`
+      SELECT ${REPORT_COLUMN_MAP[reportType].join(", ")}
+      FROM ${reportType}
+      WHERE attachment_record_id = ?
+      ORDER BY id
+    `);
+    return statement.all(attachmentRecordId) as Array<Record<string, unknown>>;
+  }
+
   recordExport(
     runId: number,
     reportType: ReportType,
@@ -576,6 +586,52 @@ export class AppDatabase {
       WHERE COALESCE(property_slug, ?) = ?
       ORDER BY received_at DESC, id DESC
     `).all(UNASSIGNED_PROPERTY_SLUG, propertySlug) as Array<Record<string, unknown>>;
+  }
+
+  getAttachmentById(attachmentId: number): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT
+        id,
+        graph_message_id,
+        graph_attachment_id,
+        last_ingest_run_id,
+        internet_message_id,
+        source_mailbox,
+        received_at,
+        attachment_name,
+        property_name,
+        property_slug,
+        extension,
+        content_type,
+        archived_path,
+        quarantine_path,
+        parse_error,
+        parsed_json_path,
+        status,
+        report_type,
+        report_title,
+        report_date
+      FROM attachments
+      WHERE id = ?
+    `).get(attachmentId) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  deleteParsedReportsForAttachment(attachmentRecordId: number): void {
+    this.db.exec("BEGIN");
+    try {
+      for (const reportType of Object.keys(REPORT_COLUMN_MAP)) {
+        this.db.prepare(`
+          DELETE FROM ${reportType}
+          WHERE attachment_record_id = ?
+        `).run(attachmentRecordId);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   getPropertyReportCounts(propertySlug: string): Array<Record<string, unknown>> {
@@ -682,6 +738,16 @@ function normalizeRowValue(value: string | number | null | undefined): string | 
   }
 
   return String(value);
+}
+
+function pickAttachmentUpdateValue<T extends keyof AttachmentUpdate>(
+  input: AttachmentUpdate,
+  key: T,
+  fallback: string | number | null | undefined
+): string | number | null {
+  return Object.prototype.hasOwnProperty.call(input, key)
+    ? ((input[key] as string | number | null | undefined) ?? null)
+    : (fallback ?? null);
 }
 
 function isSqliteDiskIoError(error: unknown): boolean {

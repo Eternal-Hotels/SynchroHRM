@@ -4,7 +4,20 @@ export const REPORT_TYPES = [
   "reservations_made_yesterday_rows",
   "zero_rate_room_rows",
   "ar_detailed_aging_rows",
-  "rate_change_rows"
+  "rate_change_rows",
+  "all_night_audit_report_rows",
+  "best_western_daily_report_rows",
+  "advance_deposit_activity_rows",
+  "booked_reservations_rows",
+  "direct_bill_aging_rows",
+  "direct_bill_ledger_rows",
+  "final_audit_metric_rows",
+  "high_balance_report_rows",
+  "hotel_statistics_metric_rows",
+  "maintenance_summary_rows",
+  "occupancy_forecast_rows",
+  "rate_override_rows",
+  "tax_report_rows"
 ] as const;
 
 export type ReportType = (typeof REPORT_TYPES)[number];

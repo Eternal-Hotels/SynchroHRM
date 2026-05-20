@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { PdfReportParser, UnsupportedReportError } from "../src/parsers/pdfReportParser.js";
+import { normalizeDetectedPropertyName } from "../src/utils/properties.js";
+import { parseLongDate, parseShortDate } from "../src/utils/dates.js";
 
 const parser = new PdfReportParser();
 const expectations = JSON.parse(
@@ -49,6 +51,35 @@ test("analysis still surfaces property metadata for unsupported PDFs", async () 
   assert.equal(analysis.propertySlug, "red-lion-hotel-pasco-airport-and-conference-center");
   assert.equal(analysis.parsedReport, null);
   assert.ok(analysis.error instanceof UnsupportedReportError);
+});
+
+test("detected property names strip trailing report context", () => {
+  assert.equal(
+    normalizeDetectedPropertyName("Hampton Inn and Suites by Hilton - La Grande, OR Date Range: May 19, 2026 - Jun 18, 2026"),
+    "Hampton Inn and Suites by Hilton - La Grande, OR"
+  );
+  assert.equal(
+    normalizeDetectedPropertyName("Hampton Inn and Suites by Hilton - La Grande, OR Current Business Day: May 19, 2026"),
+    "Hampton Inn and Suites by Hilton - La Grande, OR"
+  );
+});
+
+test("detected property names can recover a wrapped state code", () => {
+  assert.equal(
+    normalizeDetectedPropertyName(
+      "Hampton Inn and Suites by Hilton - La Grande, Date: May 18, 2026",
+      "OR Report run date: May 19, 2026"
+    ),
+    "Hampton Inn and Suites by Hilton - La Grande, OR"
+  );
+});
+
+test("long-form month dates normalize to ISO", () => {
+  assert.equal(parseLongDate("May 18, 2026"), "2026-05-18");
+});
+
+test("named short dates normalize to ISO", () => {
+  assert.equal(parseShortDate("18-May-26"), "2026-05-18");
 });
 
 test("corrupted PDFs bubble a parsing failure", async () => {

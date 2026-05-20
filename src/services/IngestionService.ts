@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { AppDatabase } from "../db/Database.js";
 import { PdfReportParser, UnsupportedReportError, type PdfAnalysis } from "../parsers/pdfReportParser.js";
@@ -9,9 +9,17 @@ import type {
   RunSummary,
   TriggerSource
 } from "../types.js";
+import { parseLongDate } from "../utils/dates.js";
 import { logger } from "../utils/logger.js";
 import { ensureDir, movePathIfExists, pathExists, sanitizeFileName, writeBufferFile, writeTextFile } from "../utils/files.js";
-import { ensurePropertyRef, normalizePropertyName, slugifyPropertyName, type PropertyRef } from "../utils/properties.js";
+import {
+  ensurePropertyRef,
+  normalizePropertyName,
+  slugifyPropertyName,
+  UNASSIGNED_PROPERTY_NAME,
+  UNASSIGNED_PROPERTY_SLUG,
+  type PropertyRef
+} from "../utils/properties.js";
 import { ExportService } from "./ExportService.js";
 
 const DELTA_STATE_KEY = "graph.delta.inbox";
@@ -20,6 +28,8 @@ interface PreparedAttachment {
   attachment: IncomingAttachment;
   propertyName: string | null;
   propertySlug: string | null;
+  reportTitle: string | null;
+  reportDate: string | null;
   parsedReport: PdfAnalysis["parsedReport"];
   preparationError: Error | null;
 }
@@ -29,15 +39,34 @@ interface PropertyMoveRequest {
   propertySlug?: string | null;
 }
 
+interface AttachmentRetryResult {
+  succeeded: boolean;
+  message: string;
+  propertySlug: string;
+  attachment: Record<string, unknown>;
+}
+
 interface PropertyDirectoryMove {
   sourcePath: string;
   destinationPath: string;
+}
+
+interface ParsedPropertyRef {
+  propertyName: string;
+  propertySlug: string;
 }
 
 export class PropertyUpdateError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PropertyUpdateError";
+  }
+}
+
+export class AttachmentRetryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AttachmentRetryError";
   }
 }
 
@@ -71,6 +100,154 @@ export class IngestionService {
     propertySlug?: Parameters<ExportService["getLatestExport"]>[1]
   ): Record<string, unknown> | null {
     return this.exportService.getLatestExport(reportType, propertySlug);
+  }
+
+  async retryAttachmentParse(attachmentId: number): Promise<AttachmentRetryResult> {
+    if (this.activeRun) {
+      throw new AttachmentRetryError("Please wait for the active inbox sync to finish before retrying a parse.");
+    }
+
+    const attachment = this.database.getAttachmentById(attachmentId);
+    if (!attachment) {
+      throw new AttachmentRetryError(`Attachment ${attachmentId} was not found.`);
+    }
+
+    const currentStatus = typeof attachment.status === "string" ? attachment.status : "";
+    if (!["failed", "unsupported"].includes(currentStatus)) {
+      throw new AttachmentRetryError("Only failed or unsupported PDF attachments can be retried.");
+    }
+
+    const archivedPath = typeof attachment.archived_path === "string" ? attachment.archived_path : null;
+    if (!archivedPath || !(await pathExists(archivedPath))) {
+      throw new AttachmentRetryError(`Archived file for attachment ${attachmentId} is unavailable.`);
+    }
+
+    const extension = typeof attachment.extension === "string"
+      ? attachment.extension.toLowerCase()
+      : path.extname(String(attachment.attachment_name ?? "")).toLowerCase();
+    if (extension !== ".pdf") {
+      throw new AttachmentRetryError("Only PDF attachments can be retried.");
+    }
+
+    const bytes = await readFile(archivedPath);
+    const existingPropertyName = typeof attachment.property_name === "string" ? attachment.property_name : null;
+    const existingPropertySlug = typeof attachment.property_slug === "string" ? attachment.property_slug : null;
+    const fallbackProperty = parsePropertyFromAttachmentName(String(attachment.attachment_name ?? ""));
+    const existingReportTitle = typeof attachment.report_title === "string" ? attachment.report_title : null;
+    const existingReportDate = typeof attachment.report_date === "string" ? attachment.report_date : null;
+    const propertyFromRecord = ensurePropertyRef({
+      propertyName: existingPropertyName,
+      propertySlug: existingPropertySlug
+    });
+
+    let analysis: PdfAnalysis | null = null;
+    try {
+      analysis = await this.parser.analyze(bytes);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.database.updateAttachment(attachmentId, {
+        status: "failed",
+        propertyName: propertyFromRecord.propertyName,
+        propertySlug: propertyFromRecord.propertySlug,
+        reportType: null,
+        reportTitle: existingReportTitle,
+        reportDate: existingReportDate,
+        parsedJsonPath: null,
+        parseError: reason
+      });
+      return {
+        succeeded: false,
+        message: `Retry failed for ${String(attachment.attachment_name ?? `attachment ${attachmentId}`)}: ${reason}`,
+        propertySlug: propertyFromRecord.propertySlug,
+        attachment: this.database.getAttachmentById(attachmentId) ?? attachment
+      };
+    }
+
+    const property = ensurePropertyRef({
+      propertyName: existingPropertyName && existingPropertyName !== UNASSIGNED_PROPERTY_NAME
+        ? existingPropertyName
+        : (analysis.propertyName ?? fallbackProperty?.propertyName ?? null),
+      propertySlug: existingPropertySlug && existingPropertySlug !== UNASSIGNED_PROPERTY_SLUG
+        ? existingPropertySlug
+        : (analysis.propertySlug ?? fallbackProperty?.propertySlug ?? null)
+    });
+    const reportTitle = analysis.reportTitle ?? existingReportTitle;
+    const reportDate = resolveAttachmentReportDate(
+      String(attachment.attachment_name ?? ""),
+      analysis.parsedReport?.reportDate ?? analysis.reportDate ?? existingReportDate
+    );
+
+    if (!analysis.parsedReport) {
+      const reason = analysis.error?.message ?? "The PDF title does not match any known report family.";
+      this.database.updateAttachment(attachmentId, {
+        status: analysis.error instanceof UnsupportedReportError ? "unsupported" : "failed",
+        propertyName: property.propertyName,
+        propertySlug: property.propertySlug,
+        reportType: null,
+        reportTitle,
+        reportDate,
+        parsedJsonPath: null,
+        parseError: reason
+      });
+      return {
+        succeeded: false,
+        message: `Retry still needs parser support for ${String(attachment.attachment_name ?? `attachment ${attachmentId}`)}.`,
+        propertySlug: property.propertySlug,
+        attachment: this.database.getAttachmentById(attachmentId) ?? attachment
+      };
+    }
+
+    const parsedReport = {
+      ...analysis.parsedReport,
+      reportDate,
+      propertyName: property.propertyName,
+      propertySlug: property.propertySlug
+    };
+    const parsedJsonPath = path.join(
+      this.dataDir,
+      "parsed",
+      property.propertySlug,
+      parsedReport.reportType,
+      `${sanitizeFileName(String(attachment.graph_message_id ?? ""))}_${sanitizeFileName(String(attachment.attachment_name ?? ""))}.json`
+    );
+    await writeTextFile(parsedJsonPath, `${JSON.stringify(parsedReport, null, 2)}\n`);
+
+    this.database.deleteParsedReportsForAttachment(attachmentId);
+    this.database.insertParsedReport(
+      Number(attachment.last_ingest_run_id),
+      attachmentId,
+      {
+        sourceMailbox: String(attachment.source_mailbox ?? ""),
+        graphMessageId: String(attachment.graph_message_id ?? ""),
+        internetMessageId: typeof attachment.internet_message_id === "string" ? attachment.internet_message_id : null,
+        receivedAt: String(attachment.received_at ?? ""),
+        attachmentId: String(attachment.graph_attachment_id ?? ""),
+        attachmentName: String(attachment.attachment_name ?? ""),
+        propertyName: property.propertyName,
+        propertySlug: property.propertySlug
+      },
+      parsedReport
+    );
+
+    this.database.updateAttachment(attachmentId, {
+      status: "parsed",
+      propertyName: property.propertyName,
+      propertySlug: property.propertySlug,
+      reportType: parsedReport.reportType,
+      reportTitle: parsedReport.reportTitle,
+      reportDate: parsedReport.reportDate,
+      parsedJsonPath,
+      parseError: null,
+      quarantinePath: null
+    });
+    await this.exportService.refreshLatestExports(property.propertySlug);
+
+    return {
+      succeeded: true,
+      message: `Retry parsed ${String(attachment.attachment_name ?? `attachment ${attachmentId}`)} successfully.`,
+      propertySlug: property.propertySlug,
+      attachment: this.database.getAttachmentById(attachmentId) ?? attachment
+    };
   }
 
   async updateProperty(currentSlug: string, input: PropertyMoveRequest): Promise<Record<string, unknown>> {
@@ -222,6 +399,10 @@ export class IngestionService {
   private async processAttachment(runId: number, summary: RunSummary, prepared: PreparedAttachment): Promise<void> {
     const { attachment } = prepared;
     const property = ensurePropertyRef(prepared);
+    const resolvedReportDate = resolveAttachmentReportDate(
+      attachment.attachmentName,
+      prepared.parsedReport?.reportDate ?? prepared.reportDate
+    );
     const archivedPath = await this.archiveAttachment(attachment, property);
     const extension = path.extname(attachment.attachmentName).toLowerCase();
     const recordId = this.database.insertAttachment({
@@ -246,6 +427,8 @@ export class IngestionService {
         propertyName: property.propertyName,
         propertySlug: property.propertySlug,
         status: "deferred",
+        reportTitle: prepared.reportTitle,
+        reportDate: resolvedReportDate,
         parseError: "XLSX parsing is intentionally deferred in v1."
       });
       summary.attachmentsDeferred += 1;
@@ -257,7 +440,10 @@ export class IngestionService {
         throw prepared.preparationError ?? new UnsupportedReportError("The PDF title does not match any known report family.");
       }
 
-      const parsedReport = prepared.parsedReport;
+      const parsedReport = {
+        ...prepared.parsedReport,
+        reportDate: resolvedReportDate
+      };
       const parsedJsonPath = path.join(
         this.dataDir,
         "parsed",
@@ -289,7 +475,7 @@ export class IngestionService {
         propertySlug: property.propertySlug,
         reportType: parsedReport.reportType,
         reportTitle: parsedReport.reportTitle,
-        reportDate: parsedReport.reportDate,
+        reportDate: resolvedReportDate,
         parsedJsonPath
       });
       summary.attachmentsParsed += 1;
@@ -308,6 +494,8 @@ export class IngestionService {
         status: quarantineReason,
         propertyName: property.propertyName,
         propertySlug: property.propertySlug,
+        reportTitle: prepared.reportTitle,
+        reportDate: resolvedReportDate,
         parseError: reason,
         quarantinePath
       });
@@ -338,6 +526,8 @@ export class IngestionService {
           attachment,
           propertyName: null,
           propertySlug: null,
+          reportTitle: null,
+          reportDate: null,
           parsedReport: null,
           preparationError: null
         } satisfies PreparedAttachment;
@@ -345,10 +535,13 @@ export class IngestionService {
 
       try {
         const analysis = await this.parser.analyze(attachment.bytes);
+        const fallbackProperty = parsePropertyFromAttachmentName(attachment.attachmentName);
         return {
           attachment,
-          propertyName: analysis.propertyName,
-          propertySlug: analysis.propertySlug,
+          propertyName: analysis.propertyName ?? fallbackProperty?.propertyName ?? null,
+          propertySlug: analysis.propertySlug ?? fallbackProperty?.propertySlug ?? null,
+          reportTitle: analysis.reportTitle,
+          reportDate: analysis.reportDate,
           parsedReport: analysis.parsedReport,
           preparationError: analysis.error
         } satisfies PreparedAttachment;
@@ -357,6 +550,8 @@ export class IngestionService {
           attachment,
           propertyName: null,
           propertySlug: null,
+          reportTitle: null,
+          reportDate: null,
           parsedReport: null,
           preparationError: error instanceof Error ? error : new Error(String(error))
         } satisfies PreparedAttachment;
@@ -444,4 +639,50 @@ function determineDominantProperty(attachments: PreparedAttachment[]): { propert
   }
 
   return Array.from(counts.values()).sort((left, right) => right.count - left.count)[0] ?? null;
+}
+
+function resolveAttachmentReportDate(attachmentName: string, parsedReportDate: string | null): string | null {
+  const fileDate = parseDateFromAttachmentName(attachmentName);
+
+  // PDTOR packets are keyed operationally by the attachment date label.
+  if (fileDate && /-PDTOR-/i.test(attachmentName)) {
+    return fileDate;
+  }
+
+  return parsedReportDate ?? fileDate;
+}
+
+function parseDateFromAttachmentName(attachmentName: string): string | null {
+  const match = attachmentName.match(/^([A-Za-z]+\s+\d{1,2},\s+\d{4})-/);
+  if (!match) {
+    return null;
+  }
+
+  return parseLongDate(match[1]);
+}
+
+function parsePropertyFromAttachmentName(attachmentName: string): ParsedPropertyRef | null {
+  if (!attachmentName) {
+    return null;
+  }
+
+  const fileStem = attachmentName
+    .replace(/\.[^.]+$/, "")
+    .replace(/_/g, " ")
+    .trim();
+
+  const afterCode = fileStem.match(/^.+?-[A-Z0-9]{4,8}-(.+)$/)?.[1] ?? fileStem;
+  const withoutSuffix = afterCode.replace(
+    /-(?:authorized-payments|breakfast-and-packages|departures-list|house-account-balances|maintenance-activity|no-show|room-count-summary|all-transactions|arrivals|direct-bill-aging|final-audit|hotel-statistics|housekeeping-sheet|rate-override)$/i,
+    ""
+  );
+  const spaced = withoutSuffix.replace(/([a-z])([A-Z])/g, "$1 $2");
+  const propertyName = normalizePropertyName(spaced);
+  const propertySlug = slugifyPropertyName(propertyName);
+
+  if (!propertyName || !propertySlug) {
+    return null;
+  }
+
+  return { propertyName, propertySlug };
 }
