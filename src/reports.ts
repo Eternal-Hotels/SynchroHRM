@@ -334,6 +334,13 @@ export const REPORT_COLUMN_MAP: Record<ReportType, readonly string[]> = {
   ]
 };
 
+export const REPORT_EXPORT_COLUMN_MAP: Record<ReportType, readonly string[]> = Object.fromEntries(
+  Object.entries(REPORT_COLUMN_MAP).map(([reportType, columns]) => [
+    reportType,
+    columns.filter((column) => !COMMON_EXPORT_COLUMNS.includes(column as (typeof COMMON_EXPORT_COLUMNS)[number]))
+  ])
+) as unknown as Record<ReportType, readonly string[]>;
+
 export const REPORT_TITLES: Record<ReportType, string> = {
   history_forecast_rows: "History and Forecast",
   manager_flash_metric_rows: "Manager - Flash Last Day",
