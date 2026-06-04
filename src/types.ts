@@ -61,8 +61,24 @@ export interface PullAttachmentsResult {
   messagesSeen: number;
 }
 
+export interface PullAttachmentsMeta {
+  nextDeltaToken: string | null;
+  deltaWasReset: boolean;
+  messagesSeen: number;
+}
+
+export interface AttachmentBatchProgress {
+  messagesSeen: number;
+}
+
+export type AttachmentBatchHandler = (
+  attachments: IncomingAttachment[],
+  progress: AttachmentBatchProgress
+) => Promise<void> | void;
+
 export interface MailAttachmentSource {
   pullAttachments(deltaToken: string | null): Promise<PullAttachmentsResult>;
+  scanAttachments?(deltaToken: string | null, onAttachments: AttachmentBatchHandler): Promise<PullAttachmentsMeta>;
 }
 
 export interface ParsedReport {
@@ -77,6 +93,8 @@ export interface ParsedReport {
 export interface RunSummary {
   messagesSeen: number;
   attachmentsSeen: number;
+  attachmentsApproved: number;
+  attachmentsNotApproved: number;
   attachmentsArchived: number;
   attachmentsParsed: number;
   attachmentsDeferred: number;

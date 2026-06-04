@@ -12,18 +12,57 @@ import { createApp } from "../src/http/createApp.js";
 import { IngestionService } from "../src/services/IngestionService.js";
 import type { MailAttachmentSource, PullAttachmentsResult } from "../src/types.js";
 
-test("manual rescan starts in the background and can be polled by run id", async () => {
-  const pullStarted = createDeferred<void>();
-  const releasePull = createDeferred<void>();
+test("manual scan starts in the background and can be polled by run id", async () => {
+  const scanStarted = createDeferred<void>();
+  const releaseScan = createDeferred<void>();
   const context = await createRouteTestContext({
     async pullAttachments(_deltaToken: string | null): Promise<PullAttachmentsResult> {
-      pullStarted.resolve();
-      await releasePull.promise;
       return {
         attachments: [],
         nextDeltaToken: "delta-after-test",
         deltaWasReset: false,
         messagesSeen: 0
+      };
+    },
+    async scanAttachments(_deltaToken, onAttachments) {
+      await onAttachments([
+        {
+          sourceMailbox: "auditor@eternalhotels.com",
+          message: {
+            graphMessageId: "approved-message",
+            internetMessageId: "<approved@local.test>",
+            subject: "Approved sender",
+            senderEmail: "ops@eternalhotels.com",
+            receivedAt: "2026-06-04T08:00:00.000Z",
+            webLink: null
+          },
+          attachmentId: "approved-attachment",
+          attachmentName: "daily.xlsx",
+          contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          bytes: Buffer.from("approved")
+        },
+        {
+          sourceMailbox: "auditor@eternalhotels.com",
+          message: {
+            graphMessageId: "blocked-message",
+            internetMessageId: "<blocked@local.test>",
+            subject: "Blocked sender",
+            senderEmail: "fraud@bad-actor.com",
+            receivedAt: "2026-06-04T08:05:00.000Z",
+            webLink: null
+          },
+          attachmentId: "blocked-attachment",
+          attachmentName: "blocked.pdf",
+          contentType: "application/pdf",
+          bytes: Buffer.from("%PDF-1.4")
+        }
+      ], { messagesSeen: 2 });
+      scanStarted.resolve();
+      await releaseScan.promise;
+      return {
+        nextDeltaToken: "delta-after-test",
+        deltaWasReset: false,
+        messagesSeen: 2
       };
     }
   });
@@ -46,12 +85,21 @@ test("manual rescan starts in the background and can be polled by run id", async
     assert.ok(Number.isInteger(startPayload.runId));
 
     const runId = Number(startPayload.runId);
-    await pullStarted.promise;
+    await scanStarted.promise;
 
     const latestRun = await fetchJsonAbsolute(`${context.baseUrl}/api/runs/latest`, adminCookie);
     assert.equal(latestRun.id, runId);
     assert.equal(latestRun.status, "running");
     assert.equal(latestRun.active, true);
+
+    const progress = await fetchJsonAbsolute(`${context.baseUrl}/api/runs/${runId}/progress`, adminCookie);
+    assert.equal(progress.id, runId);
+    assert.equal(progress.status, "running");
+    assert.equal(progress.active, true);
+    assert.equal(progress.attachments_seen, 2);
+    assert.equal(progress.attachments_approved, 1);
+    assert.equal(progress.attachments_not_approved, 1);
+    assert.equal(progress.attachments_deferred, 1);
 
     const runById = await fetchJsonAbsolute(`${context.baseUrl}/api/runs/${runId}`, adminCookie);
     assert.equal(runById.id, runId);
@@ -69,9 +117,9 @@ test("manual rescan starts in the background and can be polled by run id", async
     assert.equal(conflictResponse.status, 409);
     const conflictPayload = await conflictResponse.json() as Record<string, unknown>;
     assert.equal(conflictPayload.activeRunId, runId);
-    assert.match(String(conflictPayload.error ?? ""), /active inbox sync|another rescan/i);
+    assert.match(String(conflictPayload.error ?? ""), /active inbox sync|another mailbox scan/i);
 
-    releasePull.resolve();
+    releaseScan.resolve();
 
     const completedRun = await waitForRun(context.baseUrl, adminCookie, runId, (run) => run.status !== "running");
     assert.equal(completedRun.status, "completed");
@@ -82,7 +130,7 @@ test("manual rescan starts in the background and can be polled by run id", async
     assert.equal(dashboard.latestRun.status, "completed");
     assert.equal(dashboard.latestRun.active, false);
   } finally {
-    releasePull.resolve();
+    releaseScan.resolve();
     await context.dispose();
   }
 });
@@ -99,7 +147,7 @@ async function createRouteTestContext(source: MailAttachmentSource): Promise<{
   assert.ok(adminUser);
   authService.updateUserPassword(Number(adminUser.id), "AdminPass123!");
 
-  const service = new IngestionService(database, source, dataDir);
+  const service = new IngestionService(database, source, dataDir, ["*@eternalhotels.com"]);
   const app = createApp(mockConfig(), database, service, authService);
   const server = await listen(app);
   const port = (server.address() as AddressInfo).port;
@@ -107,6 +155,9 @@ async function createRouteTestContext(source: MailAttachmentSource): Promise<{
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     dispose: async () => {
+      for (let attempt = 0; attempt < 100 && service.getActiveRunId() !== null; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
       await closeServer(server);
       database.close();
       await rm(root, { recursive: true, force: true });

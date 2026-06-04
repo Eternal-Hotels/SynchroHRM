@@ -151,7 +151,7 @@ export function createApp(
       mailboxUser: config.graphMailboxUser,
       mailFolder: config.graphMailFolder,
       dataDir: config.dataDir,
-      latestRun: buildRunPayload(database.getLatestRun(), ingestionService)
+      latestRun: buildRunPayload(database.getLatestRunProgress(), ingestionService)
     });
   });
 
@@ -179,7 +179,7 @@ export function createApp(
       mailFolder: config.graphMailFolder,
       pollCron: config.pollCron,
       dataDir: config.dataDir,
-      latestRun: buildRunPayload(database.getLatestRun(), ingestionService),
+      latestRun: buildRunPayload(database.getLatestRunProgress(), ingestionService),
       properties: database.getPropertySummaries(),
       currentUser: getResponseUser(response)
     });
@@ -418,7 +418,7 @@ export function createApp(
   });
 
   app.get("/api/runs/latest", (_request, response) => {
-    const latestRun = database.getLatestRun();
+    const latestRun = database.getLatestRunProgress();
     if (!latestRun || typeof latestRun.id !== "number") {
       response.status(404).json({ error: "No runs have been recorded yet." });
       return;
@@ -433,14 +433,14 @@ export function createApp(
     response.json(buildRunPayload(run, ingestionService));
   });
 
-  app.get("/api/runs/:runId", (request, response) => {
+  app.get("/api/runs/:runId/progress", (request, response) => {
     const runId = Number(request.params.runId);
     if (!Number.isInteger(runId) || runId <= 0) {
       response.status(400).json({ error: "runId must be a positive integer." });
       return;
     }
 
-    const run = database.getRun(runId);
+    const run = database.getRunProgress(runId);
     if (!run) {
       response.status(404).json({ error: `Run ${runId} was not found.` });
       return;
@@ -462,7 +462,7 @@ export function createApp(
       return;
     }
 
-    response.json(run);
+    response.json(buildRunPayload(run, ingestionService));
   });
 
   app.get("/api/properties/:propertySlug", (request, response) => {

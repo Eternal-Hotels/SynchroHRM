@@ -302,7 +302,7 @@ syncCurrentPageFromHash();
 void refreshDashboard("Loading dashboard...");
 
 async function triggerRun() {
-  setLoading(true, "Starting a full mailbox rescan in the background. Older Inbox mail can take a while to process.");
+  setLoading(true, "Starting a full mailbox scan. Older Inbox mail can take a while to process.");
 
   try {
     const result = await fetchJson("/api/ingest/run", {
@@ -312,12 +312,12 @@ async function triggerRun() {
       },
       body: JSON.stringify({ fullRescan: true })
     });
-    await refreshDashboard(`Mailbox rescan started in the background. Polling run #${result.runId}.`);
+    await refreshDashboard(`Starting a full mailbox scan. Polling run #${result.runId}.`);
     ensureRunPolling(Number(result.runId));
   } catch (error) {
     const activeRunId = Number(error && error.activeRunId);
     if (Number.isInteger(activeRunId) && activeRunId > 0) {
-      await refreshDashboard(`Another inbox sync is already running. Polling run #${activeRunId}.`);
+      await refreshDashboard(`Another mailbox scan is already running. Polling run #${activeRunId}.`);
       ensureRunPolling(activeRunId);
       return;
     }
@@ -385,7 +385,11 @@ async function refreshDashboard(statusMessage) {
     }
 
     if (state.dashboard.latestRun && Number.isInteger(state.dashboard.latestRun.id)) {
-      state.latestRun = await fetchJson(`/api/runs/${encodeURIComponent(String(state.dashboard.latestRun.id))}`);
+      if (state.dashboard.latestRun.status === "running" && state.dashboard.latestRun.active === true) {
+        state.latestRun = await fetchJson(`/api/runs/${encodeURIComponent(String(state.dashboard.latestRun.id))}/progress`);
+      } else {
+        state.latestRun = await fetchJson(`/api/runs/${encodeURIComponent(String(state.dashboard.latestRun.id))}`);
+      }
     } else {
       state.latestRun = null;
     }
@@ -466,7 +470,7 @@ function queueRunPoll(runId, runPollToken, delayMs) {
 
 async function pollRunStatus(runId, runPollToken) {
   try {
-    const run = await fetchJson(`/api/runs/${encodeURIComponent(String(runId))}`);
+    const run = await fetchJson(`/api/runs/${encodeURIComponent(String(runId))}/progress`);
     if (runPollToken !== state.runPollToken || state.activeRunId !== runId) {
       return;
     }
@@ -483,7 +487,7 @@ async function pollRunStatus(runId, runPollToken) {
 
     if (run.status === "running" && run.active === true) {
       if (heroStatus) {
-        heroStatus.textContent = `Mailbox rescan is running in the background. Polling run #${runId}.`;
+        heroStatus.textContent = `Mailbox scan is running in the background. Polling run #${runId}.`;
       }
       renderOverview();
       renderLatestRun();
@@ -499,8 +503,8 @@ async function pollRunStatus(runId, runPollToken) {
     }
 
     const statusLabel = run.status === "completed"
-      ? `Mailbox rescan completed. Run #${runId} finished successfully.`
-      : `Mailbox rescan finished with failures. Run #${runId}.`;
+      ? `Mailbox scan completed. Run #${runId} finished successfully.`
+      : `Mailbox scan finished with failures. Run #${runId}.`;
     await refreshDashboard(statusLabel);
   } catch (_error) {
     if (runPollToken !== state.runPollToken || state.activeRunId !== runId) {
@@ -713,6 +717,8 @@ function renderLatestRun() {
   const summaryCards = [
     ["Messages Seen", state.latestRun.messages_seen],
     ["Attachments Seen", state.latestRun.attachments_seen],
+    ["Approved", state.latestRun.attachments_approved],
+    ["Not Approved", state.latestRun.attachments_not_approved],
     ["Archived", state.latestRun.attachments_archived],
     ["Parsed", state.latestRun.attachments_parsed],
     ["Deferred", state.latestRun.attachments_deferred],
@@ -732,7 +738,7 @@ function renderLatestRun() {
     runNotes.innerHTML = `<strong>Run notes</strong><ul class="note-list">${notes.map((note) => `<li>${escapeHtml(String(note))}</li>`).join("")}</ul>`;
   } else if (state.latestRun.status === "running") {
     runNotes.className = "notes-block empty";
-    runNotes.textContent = "Run is still in progress. Final counts and notes will appear after the background rescan finishes.";
+    runNotes.textContent = "Run is still in progress. Approved, not approved, and deferred counts update live while the mailbox scan is running.";
   } else {
     runNotes.className = "notes-block empty";
     runNotes.textContent = "No warnings or notes were recorded for the latest run.";
@@ -740,7 +746,9 @@ function renderLatestRun() {
 
   const attachments = Array.isArray(state.latestRun.attachments) ? state.latestRun.attachments : [];
   if (attachments.length === 0) {
-    attachmentList.innerHTML = '<div class="empty">No attachment records were captured for the latest run.</div>';
+    attachmentList.innerHTML = state.latestRun.status === "running"
+      ? '<div class="empty">Attachment details will load after the live mailbox scan finishes.</div>'
+      : '<div class="empty">No attachment records were captured for the latest run.</div>';
     return;
   }
 
