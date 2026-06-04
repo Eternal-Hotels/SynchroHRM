@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Synchro HRM Login</title>
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-card">
+      <div class="login-copy">
+        <div class="brand-mark">
+          <img class="brand-logo" src="/login-logo.png" alt="Eternal Hotels LLC">
+        </div>
+        <div class="eyebrow">Eternal Hotels | Secure Console</div>
+        <h1>Synchro HRM</h1>
+        <p class="subhead">Sign in to review report intake, property activity, and staged exports in the Eternal Hotels operations console.</p>
+      </div>
+
+      <div class="login-panel">
+        <section id="login-gate" class="login-form gate-panel">
+          <div class="gate-copy">
+            <strong>Restricted Access</strong>
+            <p>This system is reserved for Eternal Hotels personnel and approved operators. Confirm authorized access to reveal the sign-in form.</p>
+          </div>
+          <button id="authorized-user-button" class="primary" type="button">I am an authorized user</button>
+        </section>
+
+        <form id="login-form" class="login-form login-form-panel hidden" hidden>
+          <input id="authorized-user-input" name="authorizedUserConfirmed" type="hidden" value="false">
+          <label class="form-field">
+            <span>Username</span>
+            <input id="username-input" name="username" type="text" autocomplete="username" required>
+          </label>
+          <label class="form-field">
+            <span>Password</span>
+            <input id="password-input" name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button id="login-button" class="primary" type="submit">Sign In</button>
+        </form>
+
+        <div id="login-status" class="form-status empty">Authorized access confirmation is required before sign-in.</div>
+      </div>
+    </section>
+  </main>
+  <script src="/login.js"></script>
+</body>
+</html>

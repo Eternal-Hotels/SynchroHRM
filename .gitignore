@@ -7,3 +7,6 @@ storage/
 *.sqlite-wal
 coverage/
 tests/fixtures/generated/
+.npm/
+ExampleData/
+.env

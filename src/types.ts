@@ -6,7 +6,15 @@ export const REPORT_TYPES = [
   "ar_detailed_aging_rows",
   "rate_change_rows",
   "all_night_audit_report_rows",
+  "choice_audit_packet_rows",
   "best_western_daily_report_rows",
+  "adjustment_refund_activity_rows",
+  "all_transaction_rows",
+  "room_tax_listing_rows",
+  "daily_transaction_log_rows",
+  "credit_card_transaction_rows",
+  "closed_folio_balance_rows",
+  "operator_transaction_rows",
   "advance_deposit_activity_rows",
   "booked_reservations_rows",
   "direct_bill_aging_rows",
@@ -14,20 +22,25 @@ export const REPORT_TYPES = [
   "final_audit_metric_rows",
   "high_balance_report_rows",
   "hotel_statistics_metric_rows",
+  "in_house_guest_folio_balance_rows",
   "maintenance_summary_rows",
   "occupancy_forecast_rows",
   "rate_override_rows",
-  "tax_report_rows"
+  "rate_report_rows",
+  "reservation_listing_rows",
+  "tax_report_rows",
+  "trial_balance_report_rows"
 ] as const;
 
 export type ReportType = (typeof REPORT_TYPES)[number];
 
-export type TriggerSource = "manual" | "scheduled" | "test";
+export type TriggerSource = "manual" | "scheduled" | "test" | "reparse";
 
 export interface MailMessageRef {
   graphMessageId: string;
   internetMessageId: string | null;
   subject: string | null;
+  senderEmail: string | null;
   receivedAt: string;
   webLink: string | null;
 }

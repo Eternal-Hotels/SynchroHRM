@@ -30,6 +30,7 @@ export class ExampleDataAttachmentSource implements MailAttachmentSource {
           graphMessageId: `example-message-${index + 1}`,
           internetMessageId: `<example-${index + 1}@local.test>`,
           subject: `Example attachment ${name}`,
+          senderEmail: this.sourceMailbox,
           receivedAt: new Date(Date.UTC(2026, 4, 19, 12, index, 0)).toISOString(),
           webLink: null
         },

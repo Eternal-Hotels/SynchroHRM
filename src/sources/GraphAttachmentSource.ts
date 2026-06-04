@@ -16,6 +16,8 @@ interface GraphMessage {
   id: string;
   subject?: string | null;
   internetMessageId?: string | null;
+  from?: { emailAddress?: { address?: string | null } } | null;
+  sender?: { emailAddress?: { address?: string | null } } | null;
   receivedDateTime: string;
   webLink?: string | null;
   hasAttachments?: boolean;
@@ -59,7 +61,7 @@ export class GraphAttachmentSource implements MailAttachmentSource {
     if (!nextLink) {
       const folderPath = encodeURIComponent(this.config.graphMailFolder.toLowerCase());
       const baseUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(this.config.graphMailboxUser)}/mailFolders/${folderPath}/messages/delta`;
-      const select = "$select=id,subject,internetMessageId,receivedDateTime,webLink,hasAttachments";
+      const select = "$select=id,subject,internetMessageId,from,sender,receivedDateTime,webLink,hasAttachments";
       nextLink = `${baseUrl}?${select}`;
     }
 
@@ -76,6 +78,7 @@ export class GraphAttachmentSource implements MailAttachmentSource {
           graphMessageId: message.id,
           internetMessageId: message.internetMessageId ?? null,
           subject: message.subject ?? null,
+          senderEmail: message.from?.emailAddress?.address ?? message.sender?.emailAddress?.address ?? null,
           receivedAt: message.receivedDateTime,
           webLink: message.webLink ?? null
         };

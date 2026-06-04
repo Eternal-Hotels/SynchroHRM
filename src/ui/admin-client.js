@@ -1,6 +1,9 @@
 const state = {
   dashboard: null,
   latestRun: null,
+  currentUser: null,
+  currentPage: "overview",
+  users: [],
   selectedProperty: null,
   selectedHistoryYear: null,
   selectedHistoryMonth: null,
@@ -10,12 +13,36 @@ const state = {
   propertySaving: false,
   propertyFormStatus: "No pending edits.",
   propertyFormTone: "empty",
-  loading: false
+  viewerSaving: false,
+  viewerDeletingUserId: null,
+  userPasswordSavingId: null,
+  viewerFormStatus: "No account changes yet.",
+  viewerFormTone: "empty",
+  approvedSenderPatterns: [],
+  approvedSenderSource: "default",
+  approvedSenderSaving: false,
+  approvedSenderStatus: "No sender allowlist changes yet.",
+  approvedSenderTone: "empty",
+  netsuiteSettings: null,
+  netsuiteSaving: false,
+  netsuiteTesting: false,
+  netsuiteCatalogExporting: false,
+  netsuiteStatus: "No NetSuite connector changes yet.",
+  netsuiteTone: "empty",
+  loading: false,
+  activeRunId: null,
+  runPollTimeoutId: null,
+  runPollToken: 0
 };
 
 const heroStatus = document.getElementById("hero-status");
+const heroAccount = document.getElementById("hero-account");
 const refreshButton = document.getElementById("refresh-button");
+const reparseButton = document.getElementById("reparse-button");
 const runButton = document.getElementById("run-button");
+const logoutButton = document.getElementById("logout-button");
+const pageLinks = Array.from(document.querySelectorAll("[data-page-link]"));
+const pageViews = Array.from(document.querySelectorAll("[data-page]"));
 const overviewStamp = document.getElementById("overview-stamp");
 const overviewGrid = document.getElementById("overview-grid");
 const propertyList = document.getElementById("property-list");
@@ -37,80 +64,278 @@ const propertyHistoryCaption = document.getElementById("property-history-caption
 const propertyHistoryBrowser = document.getElementById("property-history-browser");
 const propertyHistorySelection = document.getElementById("property-history-selection");
 const propertyModalAttachments = document.getElementById("property-modal-attachments");
+const viewerUserForm = document.getElementById("viewer-user-form");
+const viewerUsernameInput = document.getElementById("viewer-username-input");
+const viewerPasswordInput = document.getElementById("viewer-password-input");
+const viewerCreateButton = document.getElementById("viewer-create-button");
+const viewerFormStatus = document.getElementById("viewer-form-status");
+const viewerUserList = document.getElementById("viewer-user-list");
+const approvedSendersForm = document.getElementById("approved-senders-form");
+const approvedSendersInput = document.getElementById("approved-senders-input");
+const approvedSendersSaveButton = document.getElementById("approved-senders-save-button");
+const approvedSendersStatus = document.getElementById("approved-senders-status");
+const netsuiteSettingsForm = document.getElementById("netsuite-settings-form");
+const netsuiteServiceBaseUrlInput = document.getElementById("netsuite-service-base-url-input");
+const netsuiteClientIdInput = document.getElementById("netsuite-client-id-input");
+const netsuiteCertificateIdInput = document.getElementById("netsuite-certificate-id-input");
+const netsuiteJwtAlgorithmInput = document.getElementById("netsuite-jwt-algorithm-input");
+const netsuiteProbeQueryInput = document.getElementById("netsuite-probe-query-input");
+const netsuitePrivateKeyInput = document.getElementById("netsuite-private-key-input");
+const netsuiteSaveButton = document.getElementById("netsuite-save-button");
+const netsuiteTestButton = document.getElementById("netsuite-test-button");
+const netsuiteClearKeyButton = document.getElementById("netsuite-clear-key-button");
+const netsuiteExportCatalogButton = document.getElementById("netsuite-export-catalog-button");
+const netsuiteKeyStatus = document.getElementById("netsuite-key-status");
+const netsuiteSettingsStatus = document.getElementById("netsuite-settings-status");
+const netsuiteLastTest = document.getElementById("netsuite-last-test");
+const netsuiteLastCatalogExport = document.getElementById("netsuite-last-catalog-export");
+const netsuiteCatalogDownloadLink = document.getElementById("netsuite-catalog-download-link");
+const PAGE_IDS = ["overview", "properties", "scope", "settings"];
+const propertyEditorAvailable = Boolean(
+  propertyEditForm &&
+  propertyNameInput &&
+  propertySlugInput &&
+  propertySaveButton &&
+  propertyFormStatus
+);
+const viewerSettingsAvailable = Boolean(
+  viewerUserForm &&
+  viewerUsernameInput &&
+  viewerPasswordInput &&
+  viewerCreateButton &&
+  viewerFormStatus &&
+  viewerUserList
+);
+const approvedSenderSettingsAvailable = Boolean(
+  approvedSendersForm &&
+  approvedSendersInput &&
+  approvedSendersSaveButton &&
+  approvedSendersStatus
+);
+const netsuiteSettingsAvailable = Boolean(
+  netsuiteSettingsForm &&
+  netsuiteServiceBaseUrlInput &&
+  netsuiteClientIdInput &&
+  netsuiteCertificateIdInput &&
+  netsuiteJwtAlgorithmInput &&
+  netsuiteProbeQueryInput &&
+  netsuitePrivateKeyInput &&
+  netsuiteSaveButton &&
+  netsuiteTestButton &&
+  netsuiteClearKeyButton &&
+  netsuiteExportCatalogButton &&
+  netsuiteKeyStatus &&
+  netsuiteSettingsStatus &&
+  netsuiteLastTest &&
+  netsuiteLastCatalogExport &&
+  netsuiteCatalogDownloadLink
+);
 
-refreshButton.addEventListener("click", () => {
-  void refreshDashboard("Dashboard refreshed.");
-});
+for (const link of pageLinks) {
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    setCurrentPage(link.getAttribute("data-page-link"), { updateHash: true });
+  });
+}
 
-runButton.addEventListener("click", () => {
-  void triggerRun();
-});
+if (refreshButton) {
+  refreshButton.addEventListener("click", () => {
+    void refreshDashboard("Dashboard refreshed.");
+  });
+}
 
-propertyList.addEventListener("click", (event) => {
-  const target = event.target instanceof Element ? event.target.closest("[data-property-slug]") : null;
-  if (!target) {
-    return;
-  }
+if (logoutButton) {
+  logoutButton.addEventListener("click", () => {
+    void logout();
+  });
+}
 
-  const propertySlug = target.getAttribute("data-property-slug");
-  if (!propertySlug) {
-    return;
-  }
+if (runButton) {
+  runButton.addEventListener("click", () => {
+    void triggerRun();
+  });
+}
 
-  void openPropertyModal(propertySlug);
-});
+if (reparseButton) {
+  reparseButton.addEventListener("click", () => {
+    void triggerReparse();
+  });
+}
 
-propertyModal.addEventListener("click", (event) => {
-  const retryTarget = event.target instanceof Element ? event.target.closest("[data-retry-attachment-id]") : null;
-  if (retryTarget) {
-    const attachmentId = Number(retryTarget.getAttribute("data-retry-attachment-id"));
-    if (Number.isInteger(attachmentId) && attachmentId > 0) {
-      void retryAttachmentParse(attachmentId);
+if (propertyList) {
+  propertyList.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-property-slug]") : null;
+    if (!target) {
+      return;
     }
-    return;
-  }
 
-  const historyTarget = event.target instanceof Element ? event.target.closest("[data-history-level][data-history-key]") : null;
-  if (historyTarget) {
-    updateHistorySelection(
-      historyTarget.getAttribute("data-history-level"),
-      historyTarget.getAttribute("data-history-key")
-    );
-    renderPropertyModal();
-    return;
-  }
+    const propertySlug = target.getAttribute("data-property-slug");
+    if (!propertySlug) {
+      return;
+    }
 
-  const target = event.target instanceof Element ? event.target.closest("[data-close-modal='1']") : null;
-  if (target) {
+    void openPropertyModal(propertySlug);
+  });
+}
+
+if (viewerUserList) {
+  viewerUserList.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-delete-user-id]") : null;
+    if (!target) {
+      return;
+    }
+
+    const userId = Number(target.getAttribute("data-delete-user-id"));
+    if (Number.isInteger(userId) && userId > 0) {
+      void deleteViewerUser(userId);
+    }
+  });
+
+  viewerUserList.addEventListener("submit", (event) => {
+    const form = event.target instanceof HTMLFormElement ? event.target : null;
+    if (!form) {
+      return;
+    }
+
+    const userId = Number(form.getAttribute("data-password-user-id"));
+    const passwordInput = form.querySelector("input[name='password']");
+    const password = passwordInput instanceof HTMLInputElement ? passwordInput.value : "";
+    event.preventDefault();
+
+    if (Number.isInteger(userId) && userId > 0) {
+      void changeUserPassword(userId, password);
+    }
+  });
+}
+
+if (propertyModal) {
+  propertyModal.addEventListener("click", (event) => {
+    const retryTarget = event.target instanceof Element ? event.target.closest("[data-retry-attachment-id]") : null;
+    if (retryTarget) {
+      const attachmentId = Number(retryTarget.getAttribute("data-retry-attachment-id"));
+      if (Number.isInteger(attachmentId) && attachmentId > 0) {
+        void retryAttachmentParse(attachmentId);
+      }
+      return;
+    }
+
+    const historyTarget = event.target instanceof Element ? event.target.closest("[data-history-level][data-history-key]") : null;
+    if (historyTarget) {
+      updateHistorySelection(
+        historyTarget.getAttribute("data-history-level"),
+        historyTarget.getAttribute("data-history-key")
+      );
+      renderPropertyModal();
+      return;
+    }
+
+    const target = event.target instanceof Element ? event.target.closest("[data-close-modal='1']") : null;
+    if (target) {
+      closePropertyModal();
+    }
+  });
+}
+
+if (propertyModalClose) {
+  propertyModalClose.addEventListener("click", () => {
     closePropertyModal();
-  }
-});
+  });
+}
 
-propertyModalClose.addEventListener("click", () => {
-  closePropertyModal();
-});
+if (propertyEditForm) {
+  propertyEditForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void savePropertyEdits();
+  });
+}
 
-propertyEditForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void savePropertyEdits();
-});
+if (viewerUserForm) {
+  viewerUserForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void createViewerUser();
+  });
+}
+
+if (approvedSendersForm) {
+  approvedSendersForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveApprovedSenders();
+  });
+}
+
+if (netsuiteSettingsForm) {
+  netsuiteSettingsForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveNetSuiteSettings(false);
+  });
+}
+
+if (netsuiteTestButton) {
+  netsuiteTestButton.addEventListener("click", () => {
+    void testNetSuiteConnection();
+  });
+}
+
+if (netsuiteClearKeyButton) {
+  netsuiteClearKeyButton.addEventListener("click", () => {
+    void saveNetSuiteSettings(true);
+  });
+}
+
+if (netsuiteExportCatalogButton) {
+  netsuiteExportCatalogButton.addEventListener("click", () => {
+    void exportNetSuiteMetadataCatalog();
+  });
+}
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !propertyModal.classList.contains("hidden")) {
+  if (propertyModal && event.key === "Escape" && !propertyModal.classList.contains("hidden")) {
     closePropertyModal();
   }
 });
 
+window.addEventListener("hashchange", () => {
+  syncCurrentPageFromHash();
+});
+
+syncCurrentPageFromHash();
 void refreshDashboard("Loading dashboard...");
 
 async function triggerRun() {
-  setLoading(true, "Running mailbox sync. This can take a moment if new attachments arrived.");
+  setLoading(true, "Starting a full mailbox rescan in the background. Older Inbox mail can take a while to process.");
 
   try {
-    const result = await fetchJson("/api/ingest/run", { method: "POST" });
+    const result = await fetchJson("/api/ingest/run", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ fullRescan: true })
+    });
+    await refreshDashboard(`Mailbox rescan started in the background. Polling run #${result.runId}.`);
+    ensureRunPolling(Number(result.runId));
+  } catch (error) {
+    const activeRunId = Number(error && error.activeRunId);
+    if (Number.isInteger(activeRunId) && activeRunId > 0) {
+      await refreshDashboard(`Another inbox sync is already running. Polling run #${activeRunId}.`);
+      ensureRunPolling(activeRunId);
+      return;
+    }
+
+    renderError(error);
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function triggerReparse() {
+  setLoading(true, "Reparsing archived reports from storage/raw. This rebuilds parsed outputs and CSV staging files.");
+
+  try {
+    const result = await fetchJson("/api/ingest/reparse", { method: "POST" });
     const statusLabel = result.status === "completed"
-      ? `Mailbox sync completed. Run #${result.runId} finished successfully.`
-      : `Mailbox sync finished with failures. Run #${result.runId}.`;
+      ? `Stored reports reparsed. Run #${result.runId} rebuilt the local staging data.`
+      : `Stored report reparse finished with failures. Run #${result.runId}.`;
 
     await refreshDashboard(statusLabel);
   } catch (error) {
@@ -120,28 +345,172 @@ async function triggerRun() {
   }
 }
 
+async function logout() {
+  if (logoutButton) {
+    logoutButton.disabled = true;
+  }
+
+  try {
+    await fetch("/api/auth/logout", {
+      method: "POST"
+    });
+  } finally {
+    window.location.href = "/login";
+  }
+}
+
 async function refreshDashboard(statusMessage) {
   setLoading(true, statusMessage);
 
   try {
     state.dashboard = await fetchJson("/api/dashboard");
+    state.currentUser = state.dashboard.currentUser || null;
+
+    if (isAdmin()) {
+      const usersPayload = await fetchJson("/api/users");
+      state.users = Array.isArray(usersPayload.users) ? usersPayload.users : [];
+
+      const approvedSendersPayload = await fetchJson("/api/settings/approved-senders");
+      state.approvedSenderPatterns = Array.isArray(approvedSendersPayload.patterns)
+        ? approvedSendersPayload.patterns
+        : [];
+      state.approvedSenderSource = approvedSendersPayload.source === "database" ? "database" : "default";
+
+      state.netsuiteSettings = await fetchJson("/api/settings/netsuite");
+    } else {
+      state.users = [];
+      state.approvedSenderPatterns = [];
+      state.approvedSenderSource = "default";
+      state.netsuiteSettings = null;
+    }
 
     if (state.dashboard.latestRun && Number.isInteger(state.dashboard.latestRun.id)) {
-      state.latestRun = await fetchJson("/api/runs/latest");
+      state.latestRun = await fetchJson(`/api/runs/${encodeURIComponent(String(state.dashboard.latestRun.id))}`);
     } else {
       state.latestRun = null;
     }
+
+    syncRunPollingFromLatestRun();
 
     if (state.selectedProperty && state.selectedProperty.property && state.selectedProperty.property.property_slug) {
       state.selectedProperty = await fetchJson(`/api/properties/${encodeURIComponent(state.selectedProperty.property.property_slug)}`);
       showPropertyModal();
     }
 
+    if (!isPageAllowed(state.currentPage)) {
+      setCurrentPage("overview", { replaceHash: true });
+    }
+
     render();
   } catch (error) {
+    if (error && /Authentication required/i.test(String(error.message || error))) {
+      window.location.href = "/login";
+      return;
+    }
+
     renderError(error);
   } finally {
     setLoading(false);
+  }
+}
+
+function syncRunPollingFromLatestRun() {
+  const runId = state.latestRun && Number.isInteger(state.latestRun.id)
+    ? Number(state.latestRun.id)
+    : null;
+  const shouldPoll = Number.isInteger(runId)
+    && runId > 0
+    && state.latestRun.status === "running"
+    && state.latestRun.active === true;
+
+  if (shouldPoll) {
+    ensureRunPolling(runId);
+    return;
+  }
+
+  stopRunPolling();
+}
+
+function ensureRunPolling(runId) {
+  if (!Number.isInteger(runId) || runId <= 0) {
+    return;
+  }
+
+  if (state.activeRunId === runId) {
+    syncToolbarButtons();
+    return;
+  }
+
+  stopRunPolling();
+  state.activeRunId = runId;
+  state.runPollToken += 1;
+  syncToolbarButtons();
+  void pollRunStatus(runId, state.runPollToken);
+}
+
+function stopRunPolling() {
+  state.activeRunId = null;
+  if (state.runPollTimeoutId !== null) {
+    window.clearTimeout(state.runPollTimeoutId);
+    state.runPollTimeoutId = null;
+  }
+  syncToolbarButtons();
+}
+
+function queueRunPoll(runId, runPollToken, delayMs) {
+  state.runPollTimeoutId = window.setTimeout(() => {
+    state.runPollTimeoutId = null;
+    void pollRunStatus(runId, runPollToken);
+  }, delayMs);
+}
+
+async function pollRunStatus(runId, runPollToken) {
+  try {
+    const run = await fetchJson(`/api/runs/${encodeURIComponent(String(runId))}`);
+    if (runPollToken !== state.runPollToken || state.activeRunId !== runId) {
+      return;
+    }
+
+    state.latestRun = run;
+    if (state.dashboard) {
+      state.dashboard.latestRun = {
+        ...(state.dashboard.latestRun || {}),
+        id: run.id,
+        status: run.status,
+        active: run.active === true
+      };
+    }
+
+    if (run.status === "running" && run.active === true) {
+      if (heroStatus) {
+        heroStatus.textContent = `Mailbox rescan is running in the background. Polling run #${runId}.`;
+      }
+      renderOverview();
+      renderLatestRun();
+      queueRunPoll(runId, runPollToken, 3000);
+      return;
+    }
+
+    stopRunPolling();
+
+    if (run.status === "running") {
+      await refreshDashboard(`Run #${runId} is still marked running, but no active worker is attached.`);
+      return;
+    }
+
+    const statusLabel = run.status === "completed"
+      ? `Mailbox rescan completed. Run #${runId} finished successfully.`
+      : `Mailbox rescan finished with failures. Run #${runId}.`;
+    await refreshDashboard(statusLabel);
+  } catch (_error) {
+    if (runPollToken !== state.runPollToken || state.activeRunId !== runId) {
+      return;
+    }
+
+    if (heroStatus) {
+      heroStatus.textContent = `Run #${runId} is still in progress, but status polling hit an error. Retrying shortly.`;
+    }
+    queueRunPoll(runId, runPollToken, 5000);
   }
 }
 
@@ -153,8 +522,10 @@ async function openPropertyModal(propertySlug) {
   propertyModalTitle.textContent = "Loading property...";
   propertyModalSubhead.textContent = "Fetching reports and export details.";
   propertyModalSummary.innerHTML = "";
-  propertyNameInput.value = "";
-  propertySlugInput.value = "";
+  if (propertyEditorAvailable) {
+    propertyNameInput.value = "";
+    propertySlugInput.value = "";
+  }
   setPropertyFormStatus("Loading property details...", "empty");
   propertyHistoryCaption.textContent = "Loading report history";
   propertyHistoryBrowser.innerHTML = "";
@@ -175,7 +546,7 @@ async function openPropertyModal(propertySlug) {
 }
 
 async function savePropertyEdits() {
-  if (!state.selectedProperty || !state.selectedProperty.property) {
+  if (!isAdmin() || !propertyEditorAvailable || !state.selectedProperty || !state.selectedProperty.property) {
     return;
   }
 
@@ -211,20 +582,66 @@ async function savePropertyEdits() {
 }
 
 function closePropertyModal() {
+  if (!propertyModal) {
+    return;
+  }
+
   propertyModal.classList.add("hidden");
   propertyModal.setAttribute("aria-hidden", "true");
 }
 
 function showPropertyModal() {
+  if (!propertyModal) {
+    return;
+  }
+
   propertyModal.classList.remove("hidden");
   propertyModal.setAttribute("aria-hidden", "false");
 }
 
 function render() {
+  renderNavigation();
+  renderAccount();
   renderOverview();
   renderProperties();
   renderLatestRun();
+  renderSettings();
   renderPropertyModal();
+}
+
+function renderNavigation() {
+  for (const link of pageLinks) {
+    const page = normalizePage(link.getAttribute("data-page-link"));
+    const allowed = isPageAllowed(page);
+    const isActive = page === state.currentPage;
+    link.hidden = !allowed;
+    link.classList.toggle("active", isActive);
+    if (isActive) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  }
+
+  for (const view of pageViews) {
+    const page = normalizePage(view.getAttribute("data-page"));
+    const isActive = isPageAllowed(page) && page === state.currentPage;
+    view.classList.toggle("is-active", isActive);
+    view.hidden = !isActive;
+  }
+}
+
+function renderAccount() {
+  if (!heroAccount) {
+    return;
+  }
+
+  if (!state.currentUser) {
+    heroAccount.textContent = "Not signed in";
+    return;
+  }
+
+  heroAccount.textContent = `Signed in as ${state.currentUser.username} (${state.currentUser.role})`;
 }
 
 function renderOverview() {
@@ -291,7 +708,7 @@ function renderLatestRun() {
   }
 
   latestRunBadge.textContent = `Run #${state.latestRun.id} ${state.latestRun.status}`;
-  latestRunBadge.className = `badge ${state.latestRun.status === "completed" ? "success" : "danger"}`;
+  latestRunBadge.className = `badge ${getRunTone(state.latestRun.status)}`;
 
   const summaryCards = [
     ["Messages Seen", state.latestRun.messages_seen],
@@ -313,6 +730,9 @@ function renderLatestRun() {
   if (notes.length > 0) {
     runNotes.className = "notes-block";
     runNotes.innerHTML = `<strong>Run notes</strong><ul class="note-list">${notes.map((note) => `<li>${escapeHtml(String(note))}</li>`).join("")}</ul>`;
+  } else if (state.latestRun.status === "running") {
+    runNotes.className = "notes-block empty";
+    runNotes.textContent = "Run is still in progress. Final counts and notes will appear after the background rescan finishes.";
   } else {
     runNotes.className = "notes-block empty";
     runNotes.textContent = "No warnings or notes were recorded for the latest run.";
@@ -347,6 +767,98 @@ function renderLatestRun() {
   `).join("");
 }
 
+function renderSettings() {
+  if (!viewerSettingsAvailable && !approvedSenderSettingsAvailable && !netsuiteSettingsAvailable) {
+    return;
+  }
+
+  syncViewerFormControls();
+  syncApprovedSenderFormControls();
+  syncNetSuiteFormControls();
+
+  if (!isAdmin()) {
+    if (viewerSettingsAvailable) {
+      viewerUserList.innerHTML = '<div class="empty">Only admins can manage viewer accounts.</div>';
+      setViewerFormStatus("Only admins can manage viewer accounts.", "empty");
+    }
+    if (approvedSenderSettingsAvailable) {
+      approvedSendersInput.value = "";
+      setApprovedSenderStatus("Only admins can manage sender allowlist settings.", "empty");
+    }
+    if (netsuiteSettingsAvailable) {
+      setNetSuiteStatus("Only admins can manage NetSuite connector settings.", "empty");
+      renderNetSuiteSettings();
+    }
+    return;
+  }
+
+  if (approvedSenderSettingsAvailable) {
+    approvedSendersStatus.textContent = state.approvedSenderStatus;
+    approvedSendersStatus.className = `form-status ${state.approvedSenderTone}`;
+    if (document.activeElement !== approvedSendersInput && !state.approvedSenderSaving) {
+      approvedSendersInput.value = state.approvedSenderPatterns.join("\n");
+    }
+  }
+
+  renderNetSuiteSettings();
+
+  if (!viewerSettingsAvailable) {
+    return;
+  }
+
+  viewerFormStatus.textContent = state.viewerFormStatus;
+  viewerFormStatus.className = `form-status ${state.viewerFormTone}`;
+
+  if (!Array.isArray(state.users) || state.users.length === 0) {
+    viewerUserList.innerHTML = '<div class="empty">No users have been recorded yet.</div>';
+    return;
+  }
+
+  viewerUserList.innerHTML = state.users.map((user) => `
+    <article class="attachment-card">
+      <div class="attachment-top">
+        <div>
+          <strong>${escapeHtml(user.username)}</strong>
+          <div class="attachment-meta">
+            <span>Role: ${escapeHtml(user.role)}</span>
+            <span>Created: ${escapeHtml(formatDateTime(user.createdAt))}</span>
+          </div>
+        </div>
+        <span class="status-chip ${slugify(user.role)}">${escapeHtml(user.role)}</span>
+      </div>
+      <form class="user-password-form" data-password-user-id="${escapeHtml(String(user.id))}">
+        <label class="form-field">
+          <span>${user.role === "admin" ? "Admin password" : "Viewer password"}</span>
+          <input
+            name="password"
+            type="password"
+            placeholder="At least 8 characters"
+            autocomplete="new-password"
+            minlength="8"
+            ${Number(user.id) === state.userPasswordSavingId ? "disabled" : ""}
+            required
+          >
+        </label>
+        <div class="toolbar-row">
+          <button
+            class="secondary"
+            type="submit"
+            ${Number(user.id) === state.userPasswordSavingId ? "disabled" : ""}
+          >${Number(user.id) === state.userPasswordSavingId ? "Saving..." : "Change Password"}</button>
+          ${user.role === "viewer" ? `
+            <button
+              class="secondary"
+              type="button"
+              data-delete-user-id="${escapeHtml(String(user.id))}"
+              ${Number(user.id) === state.viewerDeletingUserId ? "disabled" : ""}
+            >${Number(user.id) === state.viewerDeletingUserId ? "Removing..." : "Remove Viewer"}</button>
+          ` : '<span class="badge">Permanent admin</span>'}
+        </div>
+      </form>
+    </article>
+  `).join("");
+}
+
 function renderPropertyModal() {
   if (!state.selectedProperty || !state.selectedProperty.property) {
     return;
@@ -355,11 +867,13 @@ function renderPropertyModal() {
   const property = state.selectedProperty.property;
   propertyModalTitle.textContent = property.property_name || "Unassigned Property";
   propertyModalSubhead.textContent = `Viewing reports archived under ${property.property_slug || "unassigned-property"}.`;
-  propertyNameInput.value = property.property_name || "";
-  propertySlugInput.value = property.property_slug || "";
-  syncPropertyFormControls();
-  propertyFormStatus.textContent = state.propertyFormStatus;
-  propertyFormStatus.className = `form-status ${state.propertyFormTone}`;
+  if (propertyEditorAvailable) {
+    propertyNameInput.value = property.property_name || "";
+    propertySlugInput.value = property.property_slug || "";
+    syncPropertyFormControls();
+    propertyFormStatus.textContent = state.propertyFormStatus;
+    propertyFormStatus.className = `form-status ${state.propertyFormTone}`;
+  }
 
   const summaryCards = [
     ["Attachments", property.attachment_count],
@@ -434,7 +948,7 @@ function renderPropertyModal() {
       <div class="toolbar-row">
         ${attachment.id ? `<a class="export-link" href="/api/attachments/${encodeURIComponent(String(attachment.id))}/file" target="_blank" rel="noreferrer">Open Archived Report</a>` : ""}
         ${attachment.id && attachment.status === "parsed" ? `<a class="export-link" href="/api/attachments/${encodeURIComponent(String(attachment.id))}/parsed-csv">Download Parsed CSV</a>` : ""}
-        ${attachment.id && ["failed", "unsupported"].includes(String(attachment.status || "")) ? `
+        ${isAdmin() && attachment.id && ["failed", "unsupported"].includes(String(attachment.status || "")) ? `
           <button
             class="secondary"
             type="button"
@@ -449,29 +963,571 @@ function renderPropertyModal() {
 
 function setLoading(isLoading, message) {
   state.loading = isLoading;
-  runButton.disabled = isLoading;
-  refreshButton.disabled = isLoading;
-  if (message) {
+  syncToolbarButtons();
+  if (message && heroStatus) {
     heroStatus.textContent = message;
   }
+}
+
+function syncToolbarButtons() {
+  const runBusy = state.loading || isRunPolling();
+  if (runButton) {
+    runButton.disabled = runBusy;
+  }
+  if (reparseButton) {
+    reparseButton.disabled = runBusy;
+  }
+  if (refreshButton) {
+    refreshButton.disabled = state.loading;
+  }
+}
+
+function isRunPolling() {
+  return Number.isInteger(state.activeRunId) && state.activeRunId > 0;
 }
 
 function setPropertyFormStatus(message, tone) {
   state.propertyFormStatus = message;
   state.propertyFormTone = tone;
+  if (!propertyEditorAvailable) {
+    return;
+  }
+
   propertyFormStatus.textContent = message;
   propertyFormStatus.className = `form-status ${tone}`;
 }
 
 function syncPropertyFormControls() {
+  if (!propertyEditorAvailable) {
+    return;
+  }
+
   propertySaveButton.disabled = state.propertySaving || !state.selectedProperty;
   propertyNameInput.disabled = state.propertySaving || !state.selectedProperty;
   propertySlugInput.disabled = state.propertySaving || !state.selectedProperty;
 }
 
+function setViewerFormStatus(message, tone) {
+  state.viewerFormStatus = message;
+  state.viewerFormTone = tone;
+  if (!viewerSettingsAvailable) {
+    return;
+  }
+
+  viewerFormStatus.textContent = message;
+  viewerFormStatus.className = `form-status ${tone}`;
+}
+
+function setApprovedSenderStatus(message, tone) {
+  state.approvedSenderStatus = message;
+  state.approvedSenderTone = tone;
+  if (!approvedSendersStatus) {
+    return;
+  }
+
+  approvedSendersStatus.textContent = message;
+  approvedSendersStatus.className = `form-status ${tone}`;
+}
+
+function syncViewerFormControls() {
+  if (!viewerSettingsAvailable) {
+    return;
+  }
+
+  const disabled = state.viewerSaving || !isAdmin();
+  viewerCreateButton.disabled = disabled;
+  viewerUsernameInput.disabled = disabled;
+  viewerPasswordInput.disabled = disabled;
+}
+
+function syncApprovedSenderFormControls() {
+  if (!approvedSendersSaveButton || !approvedSendersInput) {
+    return;
+  }
+
+  const disabled = state.approvedSenderSaving || !isAdmin();
+  approvedSendersSaveButton.disabled = disabled;
+  approvedSendersInput.disabled = disabled;
+}
+
+function setNetSuiteStatus(message, tone) {
+  state.netsuiteStatus = message;
+  state.netsuiteTone = tone;
+  if (!netsuiteSettingsStatus) {
+    return;
+  }
+
+  netsuiteSettingsStatus.textContent = message;
+  netsuiteSettingsStatus.className = `form-status ${tone}`;
+}
+
+function syncNetSuiteFormControls() {
+  if (!netsuiteSettingsAvailable) {
+    return;
+  }
+
+  const settings = state.netsuiteSettings || null;
+  const unavailable = !settings || settings.masterKeyConfigured === false;
+  const busy = state.netsuiteSaving || state.netsuiteTesting || state.netsuiteCatalogExporting || !isAdmin() || unavailable;
+
+  netsuiteServiceBaseUrlInput.disabled = busy;
+  netsuiteClientIdInput.disabled = busy;
+  netsuiteCertificateIdInput.disabled = busy;
+  netsuiteJwtAlgorithmInput.disabled = busy;
+  netsuiteProbeQueryInput.disabled = busy;
+  netsuitePrivateKeyInput.disabled = busy;
+  netsuiteSaveButton.disabled = busy;
+  netsuiteTestButton.disabled = busy || !settings || !settings.hasPrivateKey;
+  netsuiteClearKeyButton.disabled = busy || !settings || !settings.hasPrivateKey;
+  netsuiteExportCatalogButton.disabled = busy || !settings || !settings.hasPrivateKey;
+}
+
+function renderNetSuiteSettings() {
+  if (!netsuiteSettingsAvailable) {
+    return;
+  }
+
+  const settings = state.netsuiteSettings || {
+    serviceBaseUrl: "",
+    clientId: "",
+    certificateId: "",
+    jwtAlgorithm: "PS256",
+    probeQuery: "SELECT id FROM Account",
+    hasPrivateKey: false,
+    lastTest: null,
+    lastCatalogExport: null,
+    masterKeyConfigured: false,
+    availabilityError: "NetSuite settings are unavailable.",
+    maskedClientId: null,
+    maskedCertificateId: null
+  };
+
+  if (document.activeElement !== netsuiteServiceBaseUrlInput && !state.netsuiteSaving) {
+    netsuiteServiceBaseUrlInput.value = settings.serviceBaseUrl || "";
+  }
+  if (document.activeElement !== netsuiteClientIdInput && !state.netsuiteSaving) {
+    netsuiteClientIdInput.value = settings.clientId || "";
+  }
+  if (document.activeElement !== netsuiteCertificateIdInput && !state.netsuiteSaving) {
+    netsuiteCertificateIdInput.value = settings.certificateId || "";
+  }
+  if (document.activeElement !== netsuiteJwtAlgorithmInput && !state.netsuiteSaving) {
+    netsuiteJwtAlgorithmInput.value = settings.jwtAlgorithm || "PS256";
+  }
+  if (document.activeElement !== netsuiteProbeQueryInput && !state.netsuiteSaving) {
+    netsuiteProbeQueryInput.value = settings.probeQuery || "SELECT id FROM Account";
+  }
+  if (!state.netsuiteSaving && !state.netsuiteTesting) {
+    netsuitePrivateKeyInput.value = "";
+  }
+
+  const keySummary = [];
+  if (settings.hasPrivateKey) {
+    keySummary.push("An encrypted private key is saved on the server.");
+  } else {
+    keySummary.push("No private key is saved yet.");
+  }
+  if (settings.maskedClientId) {
+    keySummary.push(`Client ID ${settings.maskedClientId}.`);
+  }
+  if (settings.maskedCertificateId) {
+    keySummary.push(`Certificate ID ${settings.maskedCertificateId}.`);
+  }
+  if (!settings.masterKeyConfigured && settings.availabilityError) {
+    netsuiteKeyStatus.textContent = settings.availabilityError;
+    netsuiteKeyStatus.className = "form-status error";
+  } else {
+    netsuiteKeyStatus.textContent = keySummary.join(" ");
+    netsuiteKeyStatus.className = `form-status ${settings.hasPrivateKey ? "success" : "empty"}`;
+  }
+
+  netsuiteSettingsStatus.textContent = state.netsuiteStatus;
+  netsuiteSettingsStatus.className = `form-status ${state.netsuiteTone}`;
+  renderNetSuiteLastTest(settings.lastTest);
+  renderNetSuiteCatalogExport(settings.lastCatalogExport);
+  syncNetSuiteFormControls();
+}
+
+function renderNetSuiteLastTest(lastTest) {
+  if (!netsuiteLastTest) {
+    return;
+  }
+
+  if (!lastTest) {
+    netsuiteLastTest.textContent = "No NetSuite proof-of-life checks have been recorded yet.";
+    netsuiteLastTest.className = "form-status empty";
+    return;
+  }
+
+  const summary = [
+    `Checked ${formatDateTime(lastTest.checkedAt)}`,
+    `Duration ${escapeHtml(String(lastTest.durationMs || 0))} ms`
+  ];
+  if (lastTest.httpStatus) {
+    summary.push(`HTTP ${escapeHtml(String(lastTest.httpStatus))}`);
+  }
+  if (typeof lastTest.count === "number") {
+    summary.push(`Count ${escapeHtml(String(lastTest.count))}`);
+  }
+  if (typeof lastTest.totalResults === "number") {
+    summary.push(`Total ${escapeHtml(String(lastTest.totalResults))}`);
+  }
+
+  const detailRows = [];
+  if (Array.isArray(lastTest.columnNames) && lastTest.columnNames.length > 0) {
+    detailRows.push(`<span>Columns: ${escapeHtml(lastTest.columnNames.join(", "))}</span>`);
+  }
+  if (lastTest.errorCode) {
+    detailRows.push(`<span>Error code: ${escapeHtml(lastTest.errorCode)}</span>`);
+  }
+  if (lastTest.errorMessage) {
+    detailRows.push(`<span>${escapeHtml(lastTest.errorMessage)}</span>`);
+  }
+
+  netsuiteLastTest.className = `form-status ${lastTest.status === "success" ? "success" : "error"}`;
+  netsuiteLastTest.innerHTML = `
+    <strong>${lastTest.status === "success" ? "NetSuite connection is live." : "NetSuite connection test failed."}</strong>
+    <div class="attachment-meta">
+      ${summary.map((item) => `<span>${item}</span>`).join("")}
+      ${detailRows.join("")}
+    </div>
+  `;
+}
+
+function renderNetSuiteCatalogExport(lastCatalogExport) {
+  if (!netsuiteLastCatalogExport || !netsuiteCatalogDownloadLink) {
+    return;
+  }
+
+  if (!lastCatalogExport) {
+    netsuiteLastCatalogExport.textContent = "No NetSuite metadata catalog exports have been recorded yet.";
+    netsuiteLastCatalogExport.className = "form-status empty";
+    netsuiteCatalogDownloadLink.hidden = true;
+    netsuiteCatalogDownloadLink.download = "";
+    return;
+  }
+
+  const summary = [
+    `Checked ${formatDateTime(lastCatalogExport.checkedAt)}`,
+    `Duration ${escapeHtml(String(lastCatalogExport.durationMs || 0))} ms`
+  ];
+  if (lastCatalogExport.httpStatus) {
+    summary.push(`HTTP ${escapeHtml(String(lastCatalogExport.httpStatus))}`);
+  }
+  if (typeof lastCatalogExport.rowCount === "number") {
+    summary.push(`Rows ${escapeHtml(String(lastCatalogExport.rowCount))}`);
+  }
+  if (typeof lastCatalogExport.schemaFileCount === "number") {
+    summary.push(`Schemas ${escapeHtml(String(lastCatalogExport.schemaFileCount))}`);
+  }
+
+  const detailRows = [];
+  if (lastCatalogExport.fileName) {
+    detailRows.push(`<span>Latest CSV: ${escapeHtml(lastCatalogExport.fileName)}</span>`);
+  }
+  if (lastCatalogExport.schemaDirectory) {
+    detailRows.push(`<span>Schema directory: ${escapeHtml(lastCatalogExport.schemaDirectory)}</span>`);
+  }
+  if (lastCatalogExport.errorCode) {
+    detailRows.push(`<span>Error code: ${escapeHtml(lastCatalogExport.errorCode)}</span>`);
+  }
+  if (lastCatalogExport.errorMessage) {
+    detailRows.push(`<span>${escapeHtml(lastCatalogExport.errorMessage)}</span>`);
+  }
+
+  netsuiteLastCatalogExport.className = `form-status ${lastCatalogExport.status === "success" ? "success" : "error"}`;
+  netsuiteLastCatalogExport.innerHTML = `
+    <strong>${lastCatalogExport.status === "success" ? "NetSuite metadata catalog export is ready." : "NetSuite metadata catalog export failed."}</strong>
+    <div class="attachment-meta">
+      ${summary.map((item) => `<span>${item}</span>`).join("")}
+      ${detailRows.join("")}
+    </div>
+  `;
+
+  const hasDownload = Boolean(lastCatalogExport.fileName);
+  netsuiteCatalogDownloadLink.hidden = !hasDownload;
+  netsuiteCatalogDownloadLink.download = hasDownload ? lastCatalogExport.fileName : "";
+}
+
+async function saveNetSuiteSettings(clearPrivateKey) {
+  if (!isAdmin() || !netsuiteSettingsAvailable) {
+    return;
+  }
+
+  state.netsuiteSaving = true;
+  syncNetSuiteFormControls();
+  setNetSuiteStatus(clearPrivateKey ? "Clearing saved NetSuite private key..." : "Saving NetSuite connector settings...", "empty");
+
+  try {
+    const result = await fetchJson("/api/settings/netsuite", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        serviceBaseUrl: netsuiteServiceBaseUrlInput.value.trim(),
+        clientId: netsuiteClientIdInput.value.trim(),
+        certificateId: netsuiteCertificateIdInput.value.trim(),
+        jwtAlgorithm: netsuiteJwtAlgorithmInput.value,
+        probeQuery: netsuiteProbeQueryInput.value.trim(),
+        privateKeyPem: clearPrivateKey ? "" : netsuitePrivateKeyInput.value,
+        clearPrivateKey
+      })
+    });
+
+    state.netsuiteSettings = result;
+    netsuitePrivateKeyInput.value = "";
+    setNetSuiteStatus(
+      clearPrivateKey
+        ? "Saved NetSuite settings and cleared the encrypted private key."
+        : "NetSuite connector settings saved.",
+      "success"
+    );
+    renderNetSuiteSettings();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuiteStatus(message, "error");
+  } finally {
+    state.netsuiteSaving = false;
+    syncNetSuiteFormControls();
+  }
+}
+
+async function testNetSuiteConnection() {
+  if (!isAdmin() || !netsuiteSettingsAvailable) {
+    return;
+  }
+
+  state.netsuiteTesting = true;
+  syncNetSuiteFormControls();
+  setNetSuiteStatus("Running the NetSuite proof-of-life query...", "empty");
+
+  try {
+    const result = await fetchJson("/api/settings/netsuite/test", {
+      method: "POST"
+    });
+    if (state.netsuiteSettings) {
+      state.netsuiteSettings.lastTest = result.lastTest || null;
+    }
+    renderNetSuiteSettings();
+    setNetSuiteStatus(
+      result.lastTest && result.lastTest.status === "success"
+        ? "NetSuite connection test succeeded."
+        : "NetSuite connection test completed with an error response.",
+      result.lastTest && result.lastTest.status === "success" ? "success" : "error"
+    );
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuiteStatus(message, "error");
+  } finally {
+    state.netsuiteTesting = false;
+    syncNetSuiteFormControls();
+  }
+}
+
+async function exportNetSuiteMetadataCatalog() {
+  if (!isAdmin() || !netsuiteSettingsAvailable) {
+    return;
+  }
+
+  state.netsuiteCatalogExporting = true;
+  syncNetSuiteFormControls();
+  setNetSuiteStatus("Exporting the NetSuite metadata catalog and full record schemas...", "empty");
+
+  try {
+    const result = await fetchJson("/api/settings/netsuite/debug/metadata-catalog/export", {
+      method: "POST"
+    });
+    if (state.netsuiteSettings) {
+      state.netsuiteSettings.lastCatalogExport = result.lastCatalogExport || null;
+    }
+    renderNetSuiteSettings();
+    setNetSuiteStatus(
+      result.lastCatalogExport && result.lastCatalogExport.status === "success"
+        ? "NetSuite metadata catalog export succeeded."
+        : "NetSuite metadata catalog export completed with an error response.",
+      result.lastCatalogExport && result.lastCatalogExport.status === "success" ? "success" : "error"
+    );
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuiteStatus(message, "error");
+  } finally {
+    state.netsuiteCatalogExporting = false;
+    syncNetSuiteFormControls();
+  }
+}
+
+async function saveApprovedSenders() {
+  if (!isAdmin() || !approvedSendersInput) {
+    return;
+  }
+
+  const patterns = approvedSendersInput.value
+    .split(/\n/g)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  state.approvedSenderSaving = true;
+  syncApprovedSenderFormControls();
+  setApprovedSenderStatus("Saving sender allowlist...", "empty");
+
+  try {
+    const result = await fetchJson("/api/settings/approved-senders", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ patterns })
+    });
+
+    state.approvedSenderPatterns = Array.isArray(result.patterns) ? result.patterns : [];
+    state.approvedSenderSource = "database";
+    approvedSendersInput.value = state.approvedSenderPatterns.join("\n");
+    setApprovedSenderStatus(
+      state.approvedSenderPatterns.length > 0
+        ? `Saved ${state.approvedSenderPatterns.length} approved sender pattern(s).`
+        : "Allowlist is now empty. All senders will be accepted.",
+      "success"
+    );
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setApprovedSenderStatus(message, "error");
+  } finally {
+    state.approvedSenderSaving = false;
+    syncApprovedSenderFormControls();
+  }
+}
+
+async function createViewerUser() {
+  if (!viewerSettingsAvailable || !isAdmin()) {
+    return;
+  }
+
+  const username = viewerUsernameInput.value.trim();
+  const password = viewerPasswordInput.value;
+
+  state.viewerSaving = true;
+  syncViewerFormControls();
+  setViewerFormStatus("Creating viewer account...", "empty");
+
+  try {
+    await fetchJson("/api/users", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    viewerUserForm.reset();
+    setViewerFormStatus(`Viewer ${username} created.`, "success");
+    await refreshDashboard(`Viewer ${username} created.`);
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setViewerFormStatus(message, "error");
+  } finally {
+    state.viewerSaving = false;
+    syncViewerFormControls();
+  }
+}
+
+async function changeUserPassword(userId, password) {
+  if (!isAdmin() || state.userPasswordSavingId === userId) {
+    return;
+  }
+
+  const targetUser = Array.isArray(state.users)
+    ? state.users.find((user) => Number(user.id) === userId) ?? null
+    : null;
+  const username = targetUser && targetUser.username ? targetUser.username : `user ${userId}`;
+
+  state.userPasswordSavingId = userId;
+  setViewerFormStatus(`Updating password for ${username}...`, "empty");
+  renderSettings();
+
+  try {
+    await fetchJson(`/api/users/${encodeURIComponent(String(userId))}/password`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ password })
+    });
+
+    setViewerFormStatus(`Password updated for ${username}.`, "success");
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setViewerFormStatus(message, "error");
+  } finally {
+    state.userPasswordSavingId = null;
+    renderSettings();
+  }
+}
+
+async function deleteViewerUser(userId) {
+  if (!isAdmin() || state.viewerDeletingUserId === userId) {
+    return;
+  }
+
+  state.viewerDeletingUserId = userId;
+  renderSettings();
+
+  try {
+    await fetchJson(`/api/users/${encodeURIComponent(String(userId))}`, {
+      method: "DELETE"
+    });
+
+    setViewerFormStatus("Viewer removed.", "success");
+    await refreshDashboard("Viewer removed.");
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setViewerFormStatus(message, "error");
+  } finally {
+    state.viewerDeletingUserId = null;
+    renderSettings();
+  }
+}
+
+function syncCurrentPageFromHash() {
+  const hashPage = normalizePage(window.location.hash.replace(/^#/, ""));
+  setCurrentPage(hashPage, { replaceHash: !window.location.hash });
+}
+
+function setCurrentPage(page, options = {}) {
+  const nextPage = normalizePage(page);
+  state.currentPage = nextPage;
+
+  const targetHash = `#${nextPage}`;
+  if (options.updateHash && window.location.hash !== targetHash) {
+    window.location.hash = targetHash;
+  } else if (options.replaceHash && window.location.hash !== targetHash) {
+    window.history.replaceState(null, "", targetHash);
+  }
+
+  renderNavigation();
+}
+
+function normalizePage(page) {
+  if (page === "latest-run") {
+    return "overview";
+  }
+
+  return PAGE_IDS.includes(page) ? page : "overview";
+}
+
+function isAdmin() {
+  return Boolean(state.currentUser && state.currentUser.role === "admin");
+}
+
+function isPageAllowed(page) {
+  return page !== "settings" || isAdmin();
+}
+
 function renderError(error) {
   const message = error && error.message ? error.message : String(error);
-  heroStatus.textContent = `Request failed: ${message}`;
+  if (heroStatus) {
+    heroStatus.textContent = `Request failed: ${message}`;
+  }
 }
 
 async function fetchJson(url, options) {
@@ -485,10 +1541,24 @@ async function fetchJson(url, options) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || `HTTP ${response.status}`);
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    if (payload && typeof payload === "object") {
+      Object.assign(error, payload);
+    }
+    throw error;
   }
 
   return payload;
+}
+
+function getRunTone(status) {
+  if (status === "completed") {
+    return "success";
+  }
+  if (status === "failed") {
+    return "danger";
+  }
+  return "running";
 }
 
 function formatDateTime(value) {

@@ -5,6 +5,13 @@ import { ensureDir } from "../utils/files.js";
 import type { ParsedReport, ReportType, RunSummary, TriggerSource } from "../types.js";
 import { COMMON_EXPORT_COLUMNS, REPORT_COLUMN_MAP } from "../reports.js";
 import { UNASSIGNED_PROPERTY_NAME, UNASSIGNED_PROPERTY_SLUG } from "../utils/properties.js";
+import type { UserRole } from "../auth/AuthService.js";
+
+const APPROVED_SENDERS_STATE_KEY = "settings.approved_senders";
+const NETSUITE_CONNECTION_STATE_KEY = "settings.netsuite.connection";
+const NETSUITE_PRIVATE_KEY_STATE_KEY = "settings.netsuite.private_key_encrypted";
+const NETSUITE_LAST_TEST_STATE_KEY = "settings.netsuite.last_test";
+const NETSUITE_LAST_CATALOG_EXPORT_STATE_KEY = "settings.netsuite.last_catalog_export";
 
 interface AttachmentInsert {
   graphMessageId: string;
@@ -26,6 +33,7 @@ interface AttachmentUpdate {
   status?: string;
   propertyName?: string | null;
   propertySlug?: string | null;
+  ingestRunId?: number;
   reportType?: ReportType | null;
   reportTitle?: string | null;
   reportDate?: string | null;
@@ -89,6 +97,7 @@ export class AppDatabase {
         graph_message_id TEXT PRIMARY KEY,
         internet_message_id TEXT,
         subject TEXT,
+        sender_email TEXT,
         received_at TEXT NOT NULL,
         web_link TEXT,
         has_attachments INTEGER NOT NULL DEFAULT 1,
@@ -135,6 +144,23 @@ export class AppDatabase {
         created_at TEXT NOT NULL,
         FOREIGN KEY (ingest_run_id) REFERENCES ingest_runs(id)
       );
+
+      CREATE TABLE IF NOT EXISTS app_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS app_sessions (
+        token TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+      );
     `);
 
     for (const [reportType, columns] of Object.entries(REPORT_COLUMN_MAP)) {
@@ -169,6 +195,7 @@ export class AppDatabase {
 
     this.ensureColumn("attachments", "property_name", "TEXT");
     this.ensureColumn("attachments", "property_slug", "TEXT");
+    this.ensureColumn("messages", "sender_email", "TEXT");
     this.ensureColumn("export_history", "property_name", "TEXT");
     this.ensureColumn("export_history", "property_slug", "TEXT");
     for (const reportType of Object.keys(REPORT_COLUMN_MAP)) {
@@ -270,20 +297,103 @@ export class AppDatabase {
     `).run(key, value, now);
   }
 
+  getUserByUsername(username: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT id, username, password_hash, role, created_at, updated_at
+      FROM app_users
+      WHERE username = ?
+      LIMIT 1
+    `).get(username) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  getUserById(userId: number): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT id, username, password_hash, role, created_at, updated_at
+      FROM app_users
+      WHERE id = ?
+      LIMIT 1
+    `).get(userId) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  listUsers(): Array<Record<string, unknown>> {
+    return this.db.prepare(`
+      SELECT id, username, role, created_at
+      FROM app_users
+      ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, username ASC
+    `).all() as Array<Record<string, unknown>>;
+  }
+
+  createUser(username: string, passwordHash: string, role: UserRole): number {
+    const now = new Date().toISOString();
+    const result = this.db.prepare(`
+      INSERT INTO app_users (username, password_hash, role, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(username, passwordHash, role, now, now);
+
+    return Number(result.lastInsertRowid);
+  }
+
+  updateUserPasswordHash(userId: number, passwordHash: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE app_users
+      SET password_hash = ?, updated_at = ?
+      WHERE id = ?
+    `).run(passwordHash, now, userId);
+  }
+
+  deleteUser(userId: number): void {
+    this.db.prepare(`DELETE FROM app_users WHERE id = ?`).run(userId);
+  }
+
+  createSession(token: string, userId: number, expiresAt: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO app_sessions (token, user_id, expires_at, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(token, userId, expiresAt, now);
+  }
+
+  getSessionUser(token: string, now: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT u.id, u.username, u.role
+      FROM app_sessions s
+      INNER JOIN app_users u ON u.id = s.user_id
+      WHERE s.token = ? AND s.expires_at > ?
+      LIMIT 1
+    `).get(token, now) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  deleteSession(token: string): void {
+    this.db.prepare(`DELETE FROM app_sessions WHERE token = ?`).run(token);
+  }
+
+  deleteExpiredSessions(now: string): void {
+    this.db.prepare(`DELETE FROM app_sessions WHERE expires_at <= ?`).run(now);
+  }
+
   upsertMessage(message: {
     graphMessageId: string;
     internetMessageId: string | null;
     subject: string | null;
+    senderEmail: string | null;
     receivedAt: string;
     webLink: string | null;
   }): void {
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO messages (graph_message_id, internet_message_id, subject, received_at, web_link, has_attachments, last_seen_at)
-      VALUES (?, ?, ?, ?, ?, 1, ?)
+      INSERT INTO messages (graph_message_id, internet_message_id, subject, sender_email, received_at, web_link, has_attachments, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?)
       ON CONFLICT(graph_message_id) DO UPDATE SET
         internet_message_id = excluded.internet_message_id,
         subject = excluded.subject,
+        sender_email = excluded.sender_email,
         received_at = excluded.received_at,
         web_link = excluded.web_link,
         last_seen_at = excluded.last_seen_at
@@ -291,10 +401,68 @@ export class AppDatabase {
       message.graphMessageId,
       message.internetMessageId,
       message.subject,
+      message.senderEmail,
       message.receivedAt,
       message.webLink,
       now
     );
+  }
+
+  getApprovedSenderPatterns(): string[] | null {
+    const raw = this.getState(APPROVED_SENDERS_STATE_KEY);
+    if (raw === null) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+
+      return parsed
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim().toLowerCase())
+        .filter((entry) => entry.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  setApprovedSenderPatterns(patterns: string[]): void {
+    this.setState(APPROVED_SENDERS_STATE_KEY, JSON.stringify(patterns));
+  }
+
+  getNetSuiteConnectionSettings(): Record<string, unknown> | null {
+    return this.getJsonState(NETSUITE_CONNECTION_STATE_KEY);
+  }
+
+  setNetSuiteConnectionSettings(settings: object): void {
+    this.setState(NETSUITE_CONNECTION_STATE_KEY, JSON.stringify(settings));
+  }
+
+  getNetSuiteEncryptedPrivateKey(): string | null {
+    return this.getState(NETSUITE_PRIVATE_KEY_STATE_KEY);
+  }
+
+  setNetSuiteEncryptedPrivateKey(value: string | null): void {
+    this.setState(NETSUITE_PRIVATE_KEY_STATE_KEY, value);
+  }
+
+  getNetSuiteLastTest(): Record<string, unknown> | null {
+    return this.getJsonState(NETSUITE_LAST_TEST_STATE_KEY);
+  }
+
+  setNetSuiteLastTest(result: object | null): void {
+    this.setState(NETSUITE_LAST_TEST_STATE_KEY, result ? JSON.stringify(result) : null);
+  }
+
+  getNetSuiteLastCatalogExport(): Record<string, unknown> | null {
+    return this.getJsonState(NETSUITE_LAST_CATALOG_EXPORT_STATE_KEY);
+  }
+
+  setNetSuiteLastCatalogExport(result: object | null): void {
+    this.setState(NETSUITE_LAST_CATALOG_EXPORT_STATE_KEY, result ? JSON.stringify(result) : null);
   }
 
   getAttachmentRecord(graphMessageId: string, graphAttachmentId: string): Record<string, unknown> | null {
@@ -302,6 +470,28 @@ export class AppDatabase {
       SELECT * FROM attachments WHERE graph_message_id = ? AND graph_attachment_id = ?
     `).get(graphMessageId, graphAttachmentId) as Record<string, unknown> | undefined;
     return row ?? null;
+  }
+
+  listAttachmentsForReparse(): Array<Record<string, unknown>> {
+    return this.db.prepare(`
+      SELECT
+        id,
+        graph_message_id,
+        graph_attachment_id,
+        internet_message_id,
+        source_mailbox,
+        received_at,
+        attachment_name,
+        property_name,
+        property_slug,
+        extension,
+        content_type,
+        archived_path,
+        report_title,
+        report_date
+      FROM attachments
+      ORDER BY received_at, id
+    `).all() as Array<Record<string, unknown>>;
   }
 
   insertAttachment(input: AttachmentInsert): number {
@@ -373,7 +563,7 @@ export class AppDatabase {
       pickAttachmentUpdateValue(input, "parseError", current.parse_error),
       pickAttachmentUpdateValue(input, "parsedJsonPath", current.parsed_json_path),
       pickAttachmentUpdateValue(input, "quarantinePath", current.quarantine_path),
-      Number(current.last_ingest_run_id),
+      pickAttachmentUpdateValue(input, "ingestRunId", current.last_ingest_run_id),
       now,
       recordId
     );
@@ -536,6 +726,7 @@ export class AppDatabase {
         MAX(received_at) AS last_received_at
       FROM attachments
       GROUP BY COALESCE(property_slug, '${UNASSIGNED_PROPERTY_SLUG}')
+      HAVING SUM(CASE WHEN status IN ('parsed', 'deferred') THEN 1 ELSE 0 END) > 0
       ORDER BY property_name
     `).all() as Array<Record<string, unknown>>;
   }
@@ -553,6 +744,7 @@ export class AppDatabase {
       FROM attachments
       WHERE COALESCE(property_slug, ?) = ?
       GROUP BY COALESCE(property_slug, ?)
+      HAVING SUM(CASE WHEN status IN ('parsed', 'deferred') THEN 1 ELSE 0 END) > 0
     `).get(
       UNASSIGNED_PROPERTY_SLUG,
       UNASSIGNED_PROPERTY_NAME,
@@ -627,6 +819,20 @@ export class AppDatabase {
           WHERE attachment_record_id = ?
         `).run(attachmentRecordId);
       }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  clearDerivedReportData(): void {
+    this.db.exec("BEGIN");
+    try {
+      for (const reportType of Object.keys(REPORT_COLUMN_MAP)) {
+        this.db.exec(`DELETE FROM ${reportType};`);
+      }
+      this.db.exec("DELETE FROM export_history;");
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -729,6 +935,20 @@ export class AppDatabase {
     }
 
     this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  private getJsonState(key: string): Record<string, unknown> | null {
+    const raw = this.getState(key);
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
   }
 }
 

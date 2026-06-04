@@ -6,6 +6,36 @@ export interface PropertyRef {
   propertySlug: string | null;
 }
 
+const ATTACHMENT_REPORT_SUFFIXES = [
+  "advance-deposit-activity",
+  "all-transactions",
+  "adjustment-activity",
+  "arrivals",
+  "authorized-payments",
+  "booked-reservations",
+  "closed-folios-balance",
+  "breakfast-and-packages",
+  "departures-list",
+  "direct-bill-aging",
+  "direct-bill-ledger",
+  "final-audit",
+  "high-balance-reports",
+  "hotel-statistics",
+  "house-account-balances",
+  "housekeeping-sheet",
+  "in-house-guest-folio-balances",
+  "maintenance-activity",
+  "maintenance-summary",
+  "no-show",
+  "occupancy",
+  "rate-override",
+  "rate-report",
+  "reservations",
+  "room-count-summary",
+  "tax-report",
+  "trial-balance-report"
+] as const;
+
 export function normalizePropertyName(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -59,5 +89,34 @@ export function slugifyPropertyName(value: string | null | undefined): string | 
 export function ensurePropertyRef(property: PropertyRef | null | undefined): { propertyName: string; propertySlug: string } {
   const propertyName = normalizePropertyName(property?.propertyName) ?? UNASSIGNED_PROPERTY_NAME;
   const propertySlug = slugifyPropertyName(property?.propertySlug ?? propertyName) ?? UNASSIGNED_PROPERTY_SLUG;
+  return { propertyName, propertySlug };
+}
+
+export function derivePropertyRefFromAttachmentName(attachmentName: string): { propertyName: string; propertySlug: string } | null {
+  if (!attachmentName) {
+    return null;
+  }
+
+  const fileStem = attachmentName
+    .replace(/\.[^.]+$/, "")
+    .replace(/_/g, " ")
+    .trim();
+  if (!fileStem) {
+    return null;
+  }
+
+  const afterCode = fileStem.match(/^.+?-[A-Z0-9]{4,8}-(.+)$/)?.[1] ?? fileStem;
+  const withoutSuffix = afterCode.replace(
+    new RegExp(`-(?:${ATTACHMENT_REPORT_SUFFIXES.join("|")})$`, "i"),
+    ""
+  );
+  const spaced = withoutSuffix.replace(/([a-z])([A-Z])/g, "$1 $2");
+  const propertyName = normalizePropertyName(spaced);
+  const propertySlug = slugifyPropertyName(propertyName);
+
+  if (!propertyName || !propertySlug) {
+    return null;
+  }
+
   return { propertyName, propertySlug };
 }
