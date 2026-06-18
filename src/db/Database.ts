@@ -147,6 +147,8 @@ export class AppDatabase {
         finished_at TEXT,
         messages_seen INTEGER NOT NULL DEFAULT 0,
         attachments_seen INTEGER NOT NULL DEFAULT 0,
+        attachments_approved INTEGER NOT NULL DEFAULT 0,
+        attachments_not_approved INTEGER NOT NULL DEFAULT 0,
         attachments_archived INTEGER NOT NULL DEFAULT 0,
         attachments_parsed INTEGER NOT NULL DEFAULT 0,
         attachments_deferred INTEGER NOT NULL DEFAULT 0,
@@ -322,6 +324,8 @@ export class AppDatabase {
     this.ensureColumn("attachments", "property_name", "TEXT");
     this.ensureColumn("attachments", "property_slug", "TEXT");
     this.ensureColumn("messages", "sender_email", "TEXT");
+    this.ensureColumn("ingest_runs", "attachments_approved", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("ingest_runs", "attachments_not_approved", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("export_history", "property_name", "TEXT");
     this.ensureColumn("export_history", "property_slug", "TEXT");
     for (const reportType of Object.keys(REPORT_COLUMN_MAP)) {
@@ -344,6 +348,31 @@ export class AppDatabase {
     return Number(result.lastInsertRowid);
   }
 
+  updateRunProgress(runId: number, summary: RunSummary): void {
+    this.db.prepare(`
+      UPDATE ingest_runs
+      SET messages_seen = ?,
+          attachments_seen = ?,
+          attachments_approved = ?,
+          attachments_not_approved = ?,
+          attachments_archived = ?,
+          attachments_parsed = ?,
+          attachments_deferred = ?,
+          attachments_failed = ?
+      WHERE id = ?
+    `).run(
+      summary.messagesSeen,
+      summary.attachmentsSeen,
+      summary.attachmentsApproved,
+      summary.attachmentsNotApproved,
+      summary.attachmentsArchived,
+      summary.attachmentsParsed,
+      summary.attachmentsDeferred,
+      summary.attachmentsFailed,
+      runId
+    );
+  }
+
   finishRun(runId: number, status: "completed" | "failed", summary: RunSummary): void {
     const now = new Date().toISOString();
     this.db.prepare(`
@@ -352,6 +381,8 @@ export class AppDatabase {
           finished_at = ?,
           messages_seen = ?,
           attachments_seen = ?,
+          attachments_approved = ?,
+          attachments_not_approved = ?,
           attachments_archived = ?,
           attachments_parsed = ?,
           attachments_deferred = ?,
@@ -363,6 +394,8 @@ export class AppDatabase {
       now,
       summary.messagesSeen,
       summary.attachmentsSeen,
+      summary.attachmentsApproved,
+      summary.attachmentsNotApproved,
       summary.attachmentsArchived,
       summary.attachmentsParsed,
       summary.attachmentsDeferred,
@@ -370,6 +403,29 @@ export class AppDatabase {
       JSON.stringify(summary.notes),
       runId
     );
+  }
+
+  getRunProgress(runId: number): Record<string, unknown> | null {
+    const run = this.db.prepare(`
+      SELECT
+        id,
+        trigger_source,
+        status,
+        started_at,
+        finished_at,
+        messages_seen,
+        attachments_seen,
+        attachments_approved,
+        attachments_not_approved,
+        attachments_archived,
+        attachments_parsed,
+        attachments_deferred,
+        attachments_failed
+      FROM ingest_runs
+      WHERE id = ?
+    `).get(runId) as Record<string, unknown> | undefined;
+
+    return run ?? null;
   }
 
   getRun(runId: number): Record<string, unknown> | null {
@@ -388,8 +444,32 @@ export class AppDatabase {
     return {
       ...run,
       attachments,
-      notes: typeof run.notes === "string" ? JSON.parse(run.notes) : []
+      notes: parseNotes(run.notes)
     };
+  }
+
+  getLatestRunProgress(): Record<string, unknown> | null {
+    const run = this.db.prepare(`
+      SELECT
+        id,
+        trigger_source,
+        status,
+        started_at,
+        finished_at,
+        messages_seen,
+        attachments_seen,
+        attachments_approved,
+        attachments_not_approved,
+        attachments_archived,
+        attachments_parsed,
+        attachments_deferred,
+        attachments_failed
+      FROM ingest_runs
+      ORDER BY id DESC
+      LIMIT 1
+    `).get() as Record<string, unknown> | undefined;
+
+    return run ?? null;
   }
 
   getLatestRun(): Record<string, unknown> | null {
@@ -405,7 +485,7 @@ export class AppDatabase {
 
     return {
       ...run,
-      notes: typeof run.notes === "string" ? JSON.parse(run.notes) : []
+      notes: parseNotes(run.notes)
     };
   }
 
@@ -1428,6 +1508,19 @@ function buildFallbackDatabasePath(databasePath: string): string {
 
 function buildSqlPlaceholders(count: number): string {
   return Array.from({ length: count }, () => "?").join(", ");
+}
+
+function parseNotes(notes: unknown): string[] {
+  if (typeof notes !== "string") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(notes);
+    return Array.isArray(parsed) ? parsed.map((entry) => String(entry)) : [];
+  } catch {
+    return [];
+  }
 }
 
 function openInitializedDatabase(databasePath: string): AppDatabase {

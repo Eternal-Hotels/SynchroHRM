@@ -1,9 +1,11 @@
 import path from "node:path";
 import type { AppConfig } from "../config.js";
 import type {
+  AttachmentBatchHandler,
   IncomingAttachment,
   MailAttachmentSource,
   MailMessageRef,
+  PullAttachmentsMeta,
   PullAttachmentsResult
 } from "../types.js";
 
@@ -42,18 +44,32 @@ export class GraphAttachmentSource implements MailAttachmentSource {
   ) {}
 
   async pullAttachments(deltaToken: string | null): Promise<PullAttachmentsResult> {
+    const attachments: IncomingAttachment[] = [];
+    const meta = await this.scanAttachments(deltaToken, (batch) => {
+      attachments.push(...batch);
+    });
+    return {
+      attachments,
+      ...meta
+    };
+  }
+
+  async scanAttachments(deltaToken: string | null, onAttachments: AttachmentBatchHandler): Promise<PullAttachmentsMeta> {
     try {
-      return await this.pullAttachmentsInner(deltaToken, false);
+      return await this.scanAttachmentsInner(deltaToken, false, onAttachments);
     } catch (error) {
       if (deltaToken && isDeltaResetError(error)) {
-        return this.pullAttachmentsInner(null, true);
+        return this.scanAttachmentsInner(null, true, onAttachments);
       }
       throw error;
     }
   }
 
-  private async pullAttachmentsInner(deltaToken: string | null, deltaWasReset: boolean): Promise<PullAttachmentsResult> {
-    const attachments: IncomingAttachment[] = [];
+  private async scanAttachmentsInner(
+    deltaToken: string | null,
+    deltaWasReset: boolean,
+    onAttachments: AttachmentBatchHandler
+  ): Promise<PullAttachmentsMeta> {
     let messagesSeen = 0;
     let nextLink: string | null = deltaToken;
     let deltaLink: string | null = null;
@@ -84,7 +100,9 @@ export class GraphAttachmentSource implements MailAttachmentSource {
         };
 
         const messageAttachments = await this.fetchMessageAttachments(messageRef);
-        attachments.push(...messageAttachments);
+        if (messageAttachments.length > 0) {
+          await onAttachments(messageAttachments, { messagesSeen });
+        }
       }
 
       deltaLink = page["@odata.deltaLink"] ?? deltaLink;
@@ -92,7 +110,6 @@ export class GraphAttachmentSource implements MailAttachmentSource {
     }
 
     return {
-      attachments,
       nextDeltaToken: deltaLink,
       deltaWasReset,
       messagesSeen

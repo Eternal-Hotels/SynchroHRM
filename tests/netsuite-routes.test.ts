@@ -749,6 +749,8 @@ function seedParsedAttachment(
   database.finishRun(runId, "completed", {
     messagesSeen: 1,
     attachmentsSeen: 1,
+    attachmentsApproved: 1,
+    attachmentsNotApproved: 0,
     attachmentsArchived: 1,
     attachmentsParsed: 1,
     attachmentsDeferred: 0,

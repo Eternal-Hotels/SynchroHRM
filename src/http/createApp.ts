@@ -12,7 +12,13 @@ import type { AppDatabase } from "../db/Database.js";
 import { NetSuitePostingError, NetSuitePostingService } from "../services/NetSuitePostingService.js";
 import { NetSuiteConnectionService, NetSuiteSettingsError } from "../services/NetSuiteConnectionService.js";
 import { REPORT_COLUMN_MAP, REPORT_EXPORT_COLUMN_MAP, REPORT_TITLES } from "../reports.js";
-import { AttachmentRetryError, PropertyUpdateError, ReparseOperationError, type IngestionService } from "../services/IngestionService.js";
+import {
+  AttachmentRetryError,
+  IngestionOperationError,
+  PropertyUpdateError,
+  ReparseOperationError,
+  type IngestionService
+} from "../services/IngestionService.js";
 import { parseApprovedSenderPatterns } from "../utils/approvedSenders.js";
 import { REPORT_TYPES } from "../types.js";
 import { toCsv } from "../utils/csv.js";
@@ -147,7 +153,7 @@ export function createApp(
       mailboxUser: config.graphMailboxUser,
       mailFolder: config.graphMailFolder,
       dataDir: config.dataDir,
-      latestRun: database.getLatestRun()
+      latestRun: buildRunPayload(database.getLatestRunProgress(), ingestionService)
     });
   });
 
@@ -175,7 +181,7 @@ export function createApp(
       mailFolder: config.graphMailFolder,
       pollCron: config.pollCron,
       dataDir: config.dataDir,
-      latestRun: database.getLatestRun(),
+      latestRun: buildRunPayload(database.getLatestRunProgress(), ingestionService),
       properties: database.getPropertySummaries(),
       currentUser: getResponseUser(response)
     });
@@ -473,14 +479,30 @@ export function createApp(
     }
   });
 
-  app.post("/api/ingest/run", async (request, response) => {
+  app.post("/api/ingest/run", (request, response) => {
     if (!requireAdminUser(response)) {
       return;
     }
 
-    const fullRescan = typeof request.body?.fullRescan === "boolean" ? request.body.fullRescan : true;
-    const result = await ingestionService.run("manual", { fullRescan });
-    response.status(result.status === "completed" ? 200 : 500).json(result);
+    try {
+      const fullRescan = typeof request.body?.fullRescan === "boolean" ? request.body.fullRescan : true;
+      const result = ingestionService.startManualRun({ fullRescan });
+      response.status(202).json({
+        ...result,
+        active: true
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof IngestionOperationError) {
+        response.status(409).json({
+          error: message,
+          activeRunId: ingestionService.getActiveRunId()
+        });
+        return;
+      }
+
+      response.status(500).json({ error: message });
+    }
   });
 
   app.post("/api/ingest/reparse", async (_request, response) => {
@@ -498,7 +520,7 @@ export function createApp(
   });
 
   app.get("/api/runs/latest", (_request, response) => {
-    const latestRun = database.getLatestRun();
+    const latestRun = database.getLatestRunProgress();
     if (!latestRun || typeof latestRun.id !== "number") {
       response.status(404).json({ error: "No runs have been recorded yet." });
       return;
@@ -510,7 +532,23 @@ export function createApp(
       return;
     }
 
-    response.json(run);
+    response.json(buildRunPayload(run, ingestionService));
+  });
+
+  app.get("/api/runs/:runId/progress", (request, response) => {
+    const runId = Number(request.params.runId);
+    if (!Number.isInteger(runId) || runId <= 0) {
+      response.status(400).json({ error: "runId must be a positive integer." });
+      return;
+    }
+
+    const run = database.getRunProgress(runId);
+    if (!run) {
+      response.status(404).json({ error: `Run ${runId} was not found.` });
+      return;
+    }
+
+    response.json(buildRunPayload(run, ingestionService));
   });
 
   app.get("/api/runs/:runId", (request, response) => {
@@ -526,7 +564,7 @@ export function createApp(
       return;
     }
 
-    response.json(run);
+    response.json(buildRunPayload(run, ingestionService));
   });
 
   app.get("/api/properties/:propertySlug", (request, response) => {
@@ -730,6 +768,23 @@ function buildPropertyPayload(
       latestExport: ingestionService.getLatestExport(reportType, propertySlug)
     })),
     attachments: database.getPropertyAttachments(propertySlug)
+  };
+}
+
+function buildRunPayload(
+  run: Record<string, unknown> | null,
+  ingestionService: IngestionService
+): Record<string, unknown> | null {
+  if (!run) {
+    return null;
+  }
+
+  const runId = typeof run.id === "number" ? run.id : Number(run.id);
+  return {
+    ...run,
+    active: Number.isInteger(runId) && runId > 0
+      ? ingestionService.isRunActive(runId)
+      : false
   };
 }
 

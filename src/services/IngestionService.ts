@@ -46,6 +46,12 @@ interface IngestionRunOptions {
   fullRescan?: boolean;
 }
 
+interface ActiveRunState {
+  runId: number;
+  triggerSource: TriggerSource;
+  promise: Promise<IngestionRunResult>;
+}
+
 interface AttachmentRetryResult {
   succeeded: boolean;
   message: string;
@@ -79,10 +85,17 @@ export class ReparseOperationError extends Error {
   }
 }
 
+export class IngestionOperationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IngestionOperationError";
+  }
+}
+
 export class IngestionService {
   private readonly parser = new PdfReportParser();
   private readonly exportService: ExportService;
-  private activeRun: Promise<IngestionRunResult> | null = null;
+  private activeRun: ActiveRunState | null = null;
 
   constructor(
     private readonly database: AppDatabase,
@@ -120,14 +133,34 @@ export class IngestionService {
 
   run(triggerSource: TriggerSource, options: IngestionRunOptions = {}): Promise<IngestionRunResult> {
     if (this.activeRun) {
-      return this.activeRun;
+      return this.activeRun.promise;
     }
 
-    this.activeRun = this.runInternal(triggerSource, options).finally(() => {
-      this.activeRun = null;
-    });
+    return this.startExclusiveRun(
+      triggerSource,
+      (runId) => this.runInternal(runId, triggerSource, options)
+    ).promise;
+  }
 
-    return this.activeRun;
+  startManualRun(options: IngestionRunOptions = {}): { runId: number; status: "running"; triggerSource: "manual" } {
+    if (this.activeRun) {
+      throw new IngestionOperationError("Please wait for the active inbox sync to finish before starting another mailbox scan.");
+    }
+
+    const activeRun = this.startExclusiveRun("manual", (runId) => this.runInternal(runId, "manual", options));
+    return {
+      runId: activeRun.runId,
+      status: "running",
+      triggerSource: "manual"
+    };
+  }
+
+  getActiveRunId(): number | null {
+    return this.activeRun?.runId ?? null;
+  }
+
+  isRunActive(runId: number): boolean {
+    return this.activeRun?.runId === runId;
   }
 
   getLatestExport(
@@ -142,11 +175,7 @@ export class IngestionService {
       throw new ReparseOperationError("Please wait for the active inbox sync to finish before reparsing stored reports.");
     }
 
-    this.activeRun = this.reparseStoredReportsInternal().finally(() => {
-      this.activeRun = null;
-    });
-
-    return this.activeRun;
+    return this.startExclusiveRun("reparse", (runId) => this.reparseStoredReportsInternal(runId)).promise;
   }
 
   async retryAttachmentParse(attachmentId: number): Promise<AttachmentRetryResult> {
@@ -364,17 +393,102 @@ export class IngestionService {
     }
   }
 
-  private async runInternal(triggerSource: TriggerSource, options: IngestionRunOptions): Promise<IngestionRunResult> {
-    await Promise.all([
-      ensureDir(path.join(this.dataDir, "raw")),
-      ensureDir(path.join(this.dataDir, "quarantine")),
-      ensureDir(path.join(this.dataDir, "parsed"))
-    ]);
-
+  private startExclusiveRun(
+    triggerSource: TriggerSource,
+    execute: (runId: number) => Promise<IngestionRunResult>
+  ): ActiveRunState {
     const runId = this.database.createRun(triggerSource);
+    const promise = execute(runId).finally(() => {
+      if (this.activeRun?.runId === runId) {
+        this.activeRun = null;
+      }
+    });
+    const activeRun = {
+      runId,
+      triggerSource,
+      promise
+    } satisfies ActiveRunState;
+    this.activeRun = activeRun;
+    return activeRun;
+  }
+
+  private persistRunProgress(runId: number, summary: RunSummary): void {
+    this.database.updateRunProgress(runId, summary);
+  }
+
+  private async pullAndProcessAttachments(
+    runId: number,
+    summary: RunSummary,
+    approvedSenderPatterns: string[],
+    deltaToken: string | null
+  ): Promise<{ nextDeltaToken: string | null; deltaWasReset: boolean; messagesSeen: number }> {
+    if (typeof this.source.scanAttachments === "function") {
+      return this.source.scanAttachments(deltaToken, async (attachments, progress) => {
+        summary.messagesSeen = progress.messagesSeen;
+        await this.processIncomingAttachments(runId, summary, approvedSenderPatterns, attachments);
+      });
+    }
+
+    const pulled = await this.source.pullAttachments(deltaToken);
+    summary.messagesSeen = pulled.messagesSeen;
+    await this.processIncomingAttachments(runId, summary, approvedSenderPatterns, pulled.attachments);
+    return pulled;
+  }
+
+  private async processIncomingAttachments(
+    runId: number,
+    summary: RunSummary,
+    approvedSenderPatterns: string[],
+    attachments: IncomingAttachment[]
+  ): Promise<void> {
+    if (attachments.length === 0) {
+      this.persistRunProgress(runId, summary);
+      return;
+    }
+
+    summary.attachmentsSeen += attachments.length;
+    const attachmentsFromApprovedSenders = this.filterAttachmentsByApprovedSender(
+      attachments,
+      approvedSenderPatterns,
+      summary
+    );
+    this.persistRunProgress(runId, summary);
+
+    if (attachmentsFromApprovedSenders.length === 0) {
+      return;
+    }
+
+    const preparedAttachments = await this.prepareAttachments(attachmentsFromApprovedSenders);
+
+    for (const prepared of preparedAttachments) {
+      const attachment = prepared.attachment;
+      this.database.upsertMessage({
+        graphMessageId: attachment.message.graphMessageId,
+        internetMessageId: attachment.message.internetMessageId,
+        subject: attachment.message.subject,
+        senderEmail: attachment.message.senderEmail,
+        receivedAt: attachment.message.receivedAt,
+        webLink: attachment.message.webLink
+      });
+
+      const existing = this.database.getAttachmentRecord(attachment.message.graphMessageId, attachment.attachmentId);
+      if (existing) {
+        summary.notes.push(`Skipped duplicate attachment ${attachment.attachmentName} (${attachment.attachmentId}).`);
+        this.persistRunProgress(runId, summary);
+        continue;
+      }
+
+      await this.processAttachment(runId, summary, prepared);
+      this.persistRunProgress(runId, summary);
+    }
+  }
+
+  private async runInternal(runId: number, triggerSource: TriggerSource, options: IngestionRunOptions): Promise<IngestionRunResult> {
     const summary: RunSummary = {
       messagesSeen: 0,
       attachmentsSeen: 0,
+      attachmentsApproved: 0,
+      attachmentsNotApproved: 0,
       attachmentsArchived: 0,
       attachmentsParsed: 0,
       attachmentsDeferred: 0,
@@ -383,50 +497,29 @@ export class IngestionService {
     };
 
     try {
+      await Promise.all([
+        ensureDir(path.join(this.dataDir, "raw")),
+        ensureDir(path.join(this.dataDir, "quarantine")),
+        ensureDir(path.join(this.dataDir, "parsed"))
+      ]);
+
       const storedDeltaToken = this.database.getState(DELTA_STATE_KEY);
       const fullRescan = options.fullRescan ?? triggerSource === "manual";
       const deltaToken = fullRescan ? null : storedDeltaToken;
-      const pulled = await this.source.pullAttachments(deltaToken);
-      summary.messagesSeen = pulled.messagesSeen;
       if (fullRescan) {
         summary.notes.push(
           storedDeltaToken
-            ? "Manual run ignored the saved Microsoft Graph delta token and performed a full Inbox rescan."
-            : "Manual run performed a full Inbox rescan because no Graph delta token was saved yet."
+            ? "Manual run ignored the saved Microsoft Graph delta token and performed a full Inbox scan."
+            : "Manual run performed a full Inbox scan because no Graph delta token was saved yet."
         );
       }
+      const approvedSenderPatterns = this.getApprovedSenderPatterns().patterns;
+      const pulled = await this.pullAndProcessAttachments(runId, summary, approvedSenderPatterns, deltaToken);
+      summary.messagesSeen = pulled.messagesSeen;
       if (pulled.deltaWasReset) {
         summary.notes.push("Microsoft Graph delta token was reset and a full Inbox scan was retried.");
       }
-
-      const approvedSenderPatterns = this.getApprovedSenderPatterns().patterns;
-      const attachmentsFromApprovedSenders = this.filterAttachmentsByApprovedSender(
-        pulled.attachments,
-        approvedSenderPatterns,
-        summary
-      );
-      const preparedAttachments = await this.prepareAttachments(attachmentsFromApprovedSenders);
-
-      for (const prepared of preparedAttachments) {
-        const attachment = prepared.attachment;
-        summary.attachmentsSeen += 1;
-        this.database.upsertMessage({
-          graphMessageId: attachment.message.graphMessageId,
-          internetMessageId: attachment.message.internetMessageId,
-          subject: attachment.message.subject,
-          senderEmail: attachment.message.senderEmail,
-          receivedAt: attachment.message.receivedAt,
-          webLink: attachment.message.webLink
-        });
-
-        const existing = this.database.getAttachmentRecord(attachment.message.graphMessageId, attachment.attachmentId);
-        if (existing) {
-          summary.notes.push(`Skipped duplicate attachment ${attachment.attachmentName} (${attachment.attachmentId}).`);
-          continue;
-        }
-
-        await this.processAttachment(runId, summary, prepared);
-      }
+      this.persistRunProgress(runId, summary);
 
       if (pulled.nextDeltaToken) {
         this.database.setState(DELTA_STATE_KEY, pulled.nextDeltaToken);
@@ -455,17 +548,12 @@ export class IngestionService {
     }
   }
 
-  private async reparseStoredReportsInternal(): Promise<IngestionRunResult> {
-    await Promise.all([
-      ensureDir(path.join(this.dataDir, "raw")),
-      ensureDir(path.join(this.dataDir, "quarantine")),
-      ensureDir(path.join(this.dataDir, "parsed"))
-    ]);
-
-    const runId = this.database.createRun("reparse");
+  private async reparseStoredReportsInternal(runId: number): Promise<IngestionRunResult> {
     const summary: RunSummary = {
       messagesSeen: 0,
       attachmentsSeen: 0,
+      attachmentsApproved: 0,
+      attachmentsNotApproved: 0,
       attachmentsArchived: 0,
       attachmentsParsed: 0,
       attachmentsDeferred: 0,
@@ -474,9 +562,17 @@ export class IngestionService {
     };
 
     try {
+      await Promise.all([
+        ensureDir(path.join(this.dataDir, "raw")),
+        ensureDir(path.join(this.dataDir, "quarantine")),
+        ensureDir(path.join(this.dataDir, "parsed"))
+      ]);
+
       const attachments = this.database.listAttachmentsForReparse();
       summary.messagesSeen = attachments.length;
       summary.attachmentsSeen = attachments.length;
+      summary.attachmentsApproved = attachments.length;
+      this.persistRunProgress(runId, summary);
 
       await this.resetGeneratedArtifacts();
       this.database.clearDerivedReportData();
@@ -487,6 +583,7 @@ export class IngestionService {
 
       for (const attachment of attachments) {
         await this.reparseAttachment(runId, summary, attachment);
+        this.persistRunProgress(runId, summary);
       }
 
       const exports = await this.exportService.exportRun(runId);
@@ -696,18 +793,19 @@ export class IngestionService {
     summary: RunSummary
   ): IncomingAttachment[] {
     if (approvedSenderPatterns.length === 0) {
+      summary.attachmentsApproved += attachments.length;
       return attachments;
     }
 
     const allowed: IncomingAttachment[] = [];
     for (const attachment of attachments) {
       if (isSenderApproved(attachment.message.senderEmail, approvedSenderPatterns)) {
+        summary.attachmentsApproved += 1;
         allowed.push(attachment);
         continue;
       }
 
-      summary.attachmentsSeen += 1;
-      summary.attachmentsDeferred += 1;
+      summary.attachmentsNotApproved += 1;
       summary.notes.push(
         `Skipped attachment ${attachment.attachmentName} from unapproved sender ${attachment.message.senderEmail ?? "unknown"}.`
       );

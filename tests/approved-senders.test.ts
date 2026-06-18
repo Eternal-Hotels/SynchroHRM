@@ -81,8 +81,11 @@ test("ingestion skips attachments from unapproved senders", async () => {
 
     assert.equal(result.status, "completed");
     assert.equal(result.summary.attachmentsSeen, 2);
+    assert.equal(result.summary.attachmentsApproved, 1);
+    assert.equal(result.summary.attachmentsNotApproved, 1);
     assert.equal(result.summary.attachmentsArchived, 1);
-    assert.equal(result.summary.attachmentsDeferred, 1);
+    assert.equal(result.summary.attachmentsDeferred, 0);
+    assert.equal(result.summary.attachmentsFailed, 1);
     assert.ok(result.summary.notes.some((note) => note.includes("unapproved sender fraud@bad-actor.com")));
   } finally {
     database.close();

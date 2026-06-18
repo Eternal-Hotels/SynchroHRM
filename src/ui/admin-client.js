@@ -38,6 +38,9 @@ const state = {
   netsuitePostingPreviewing: false,
   netsuitePostingSubmitting: false,
   netsuitePostingSelectedRunId: "",
+  activeRunId: null,
+  runPollTimeoutId: null,
+  runPollToken: 0,
   loading: false
 };
 
@@ -435,7 +438,7 @@ syncCurrentPageFromHash();
 void refreshDashboard("Loading dashboard...");
 
 async function triggerRun() {
-  setLoading(true, "Running a full mailbox rescan. This can take longer because older Inbox mail is included.");
+  setLoading(true, "Starting a full mailbox scan. Older Inbox mail can take a while to process.");
 
   try {
     const result = await fetchJson("/api/ingest/run", {
@@ -445,12 +448,16 @@ async function triggerRun() {
       },
       body: JSON.stringify({ fullRescan: true })
     });
-    const statusLabel = result.status === "completed"
-      ? `Mailbox rescan completed. Run #${result.runId} finished successfully.`
-      : `Mailbox rescan finished with failures. Run #${result.runId}.`;
-
-    await refreshDashboard(statusLabel);
+    await refreshDashboard(`Starting a full mailbox scan. Polling run #${result.runId}.`);
+    ensureRunPolling(Number(result.runId));
   } catch (error) {
+    const activeRunId = Number(error && error.activeRunId);
+    if (Number.isInteger(activeRunId) && activeRunId > 0) {
+      await refreshDashboard(`Another mailbox scan is already running. Polling run #${activeRunId}.`);
+      ensureRunPolling(activeRunId);
+      return;
+    }
+
     renderError(error);
   } finally {
     setLoading(false);
@@ -521,10 +528,16 @@ async function refreshDashboard(statusMessage) {
     }
 
     if (state.dashboard.latestRun && Number.isInteger(state.dashboard.latestRun.id)) {
-      state.latestRun = await fetchJson("/api/runs/latest");
+      if (state.dashboard.latestRun.status === "running" && state.dashboard.latestRun.active === true) {
+        state.latestRun = await fetchJson(`/api/runs/${encodeURIComponent(String(state.dashboard.latestRun.id))}/progress`);
+      } else {
+        state.latestRun = await fetchJson(`/api/runs/${encodeURIComponent(String(state.dashboard.latestRun.id))}`);
+      }
     } else {
       state.latestRun = null;
     }
+
+    syncRunPollingFromLatestRun();
 
     if (state.selectedProperty && state.selectedProperty.property && state.selectedProperty.property.property_slug) {
       state.selectedProperty = await fetchJson(`/api/properties/${encodeURIComponent(state.selectedProperty.property.property_slug)}`);
@@ -567,6 +580,106 @@ async function refreshDashboard(statusMessage) {
     renderError(error);
   } finally {
     setLoading(false);
+  }
+}
+
+function syncRunPollingFromLatestRun() {
+  const runId = state.latestRun && Number.isInteger(state.latestRun.id)
+    ? Number(state.latestRun.id)
+    : null;
+  const shouldPoll = Number.isInteger(runId)
+    && runId > 0
+    && state.latestRun.status === "running"
+    && state.latestRun.active === true;
+
+  if (shouldPoll) {
+    ensureRunPolling(runId);
+    return;
+  }
+
+  stopRunPolling();
+}
+
+function ensureRunPolling(runId) {
+  if (!Number.isInteger(runId) || runId <= 0) {
+    return;
+  }
+
+  if (state.activeRunId === runId) {
+    syncToolbarButtons();
+    return;
+  }
+
+  stopRunPolling();
+  state.activeRunId = runId;
+  state.runPollToken += 1;
+  syncToolbarButtons();
+  void pollRunStatus(runId, state.runPollToken);
+}
+
+function stopRunPolling() {
+  state.activeRunId = null;
+  if (state.runPollTimeoutId !== null) {
+    window.clearTimeout(state.runPollTimeoutId);
+    state.runPollTimeoutId = null;
+  }
+  syncToolbarButtons();
+}
+
+function queueRunPoll(runId, runPollToken, delayMs) {
+  state.runPollTimeoutId = window.setTimeout(() => {
+    state.runPollTimeoutId = null;
+    void pollRunStatus(runId, runPollToken);
+  }, delayMs);
+}
+
+async function pollRunStatus(runId, runPollToken) {
+  try {
+    const run = await fetchJson(`/api/runs/${encodeURIComponent(String(runId))}/progress`);
+    if (runPollToken !== state.runPollToken || state.activeRunId !== runId) {
+      return;
+    }
+
+    state.latestRun = run;
+    if (state.dashboard) {
+      state.dashboard.latestRun = {
+        ...(state.dashboard.latestRun || {}),
+        id: run.id,
+        status: run.status,
+        active: run.active === true
+      };
+    }
+
+    if (run.status === "running" && run.active === true) {
+      if (heroStatus) {
+        heroStatus.textContent = `Mailbox scan is running in the background. Polling run #${runId}.`;
+      }
+      renderOverview();
+      renderLatestRun();
+      queueRunPoll(runId, runPollToken, 3000);
+      return;
+    }
+
+    stopRunPolling();
+
+    if (run.status === "running") {
+      await refreshDashboard(`Run #${runId} is still marked running, but no active worker is attached.`);
+      return;
+    }
+
+    const statusLabel = run.status === "completed"
+      ? `Mailbox scan completed. Run #${runId} finished successfully.`
+      : `Mailbox scan finished with failures. Run #${runId}.`;
+    await refreshDashboard(statusLabel);
+  } catch (_error) {
+    if (runPollToken !== state.runPollToken || state.activeRunId !== runId) {
+      return;
+    }
+
+    if (heroStatus) {
+      heroStatus.textContent = `Run #${runId} is still in progress, but status polling hit an error. Retrying shortly.`;
+    }
+    queueRunPoll(runId, runPollToken, 5000);
   }
 }
 
@@ -857,11 +970,13 @@ function renderLatestRun() {
   }
 
   latestRunBadge.textContent = `Run #${state.latestRun.id} ${state.latestRun.status}`;
-  latestRunBadge.className = `badge ${state.latestRun.status === "completed" ? "success" : "danger"}`;
+  latestRunBadge.className = `badge ${getRunTone(state.latestRun.status)}`;
 
   const summaryCards = [
     ["Messages Seen", state.latestRun.messages_seen],
     ["Attachments Seen", state.latestRun.attachments_seen],
+    ["Approved", state.latestRun.attachments_approved],
+    ["Not Approved", state.latestRun.attachments_not_approved],
     ["Archived", state.latestRun.attachments_archived],
     ["Parsed", state.latestRun.attachments_parsed],
     ["Deferred", state.latestRun.attachments_deferred],
@@ -879,6 +994,9 @@ function renderLatestRun() {
   if (notes.length > 0) {
     runNotes.className = "notes-block";
     runNotes.innerHTML = `<strong>Run notes</strong><ul class="note-list">${notes.map((note) => `<li>${escapeHtml(String(note))}</li>`).join("")}</ul>`;
+  } else if (state.latestRun.status === "running") {
+    runNotes.className = "notes-block empty";
+    runNotes.textContent = "Run is still in progress. Approved, not approved, and deferred counts update live while the mailbox scan is running.";
   } else {
     runNotes.className = "notes-block empty";
     runNotes.textContent = "No warnings or notes were recorded for the latest run.";
@@ -886,7 +1004,9 @@ function renderLatestRun() {
 
   const attachments = Array.isArray(state.latestRun.attachments) ? state.latestRun.attachments : [];
   if (attachments.length === 0) {
-    attachmentList.innerHTML = '<div class="empty">No attachment records were captured for the latest run.</div>';
+    attachmentList.innerHTML = state.latestRun.status === "running"
+      ? '<div class="empty">Attachment details will load after the live mailbox scan finishes.</div>'
+      : '<div class="empty">No attachment records were captured for the latest run.</div>';
     return;
   }
 
@@ -1571,18 +1691,27 @@ function renderPropertyModal() {
 
 function setLoading(isLoading, message) {
   state.loading = isLoading;
-  if (runButton) {
-    runButton.disabled = isLoading;
-  }
-  if (reparseButton) {
-    reparseButton.disabled = isLoading;
-  }
-  if (refreshButton) {
-    refreshButton.disabled = isLoading;
-  }
+  syncToolbarButtons();
   if (message && heroStatus) {
     heroStatus.textContent = message;
   }
+}
+
+function syncToolbarButtons() {
+  const runBusy = state.loading || isRunPolling();
+  if (runButton) {
+    runButton.disabled = runBusy;
+  }
+  if (reparseButton) {
+    reparseButton.disabled = runBusy;
+  }
+  if (refreshButton) {
+    refreshButton.disabled = state.loading;
+  }
+}
+
+function isRunPolling() {
+  return Number.isInteger(state.activeRunId) && state.activeRunId > 0;
 }
 
 function setPropertyFormStatus(message, tone) {
@@ -2148,6 +2277,16 @@ async function fetchJson(url, options) {
   }
 
   return payload;
+}
+
+function getRunTone(status) {
+  if (status === "completed") {
+    return "success";
+  }
+  if (status === "failed") {
+    return "danger";
+  }
+  return "running";
 }
 
 function formatDateTime(value) {
