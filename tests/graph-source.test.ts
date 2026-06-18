@@ -14,6 +14,11 @@ test("graph source resets stale delta tokens and filters to supported file attac
           id: "message-1",
           subject: "Daily reports",
           internetMessageId: "<message-1@test>",
+          from: {
+            emailAddress: {
+              address: "auditor+ops@eternalhotels.com"
+            }
+          },
           receivedDateTime: "2026-05-19T12:00:00Z",
           hasAttachments: true
         }
@@ -64,6 +69,7 @@ test("graph source resets stale delta tokens and filters to supported file attac
   assert.equal(result.attachments.length, 1);
   assert.equal(result.attachments[0].attachmentName, "sales.pdf");
   assert.equal(result.attachments[0].sourceMailbox, "auditor@eternalhotels.com");
+  assert.equal(result.attachments[0].message.senderEmail, "auditor+ops@eternalhotels.com");
 
   const tokenRequests = requests.filter((url) => url.includes("/oauth2/v2.0/token"));
   assert.equal(tokenRequests.length, 1);
@@ -72,6 +78,7 @@ test("graph source resets stale delta tokens and filters to supported file attac
 function mockConfig(): AppConfig {
   return {
     port: 3000,
+    bindHost: "127.0.0.1",
     graphTenantId: "tenant",
     graphClientId: "client",
     graphClientSecret: "secret",
@@ -79,7 +86,9 @@ function mockConfig(): AppConfig {
     graphMailFolder: "Inbox",
     pollCron: "0 * * * *",
     dataDir: "./storage",
-    databasePath: "./storage/app.sqlite"
+    databasePath: "./storage/app.sqlite",
+    defaultApprovedSenderPatterns: [],
+    secretMasterKey: null
   };
 }
 

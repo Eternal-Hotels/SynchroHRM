@@ -8,6 +8,11 @@ export async function loadDotEnv(envPath = ".env"): Promise<void> {
     return;
   }
 
+  if (process.env.SYNCHRO_SKIP_DOTENV === "1") {
+    loaded = true;
+    return;
+  }
+
   const resolved = path.resolve(envPath);
 
   try {

@@ -5,6 +5,13 @@ import { ensureDir } from "../utils/files.js";
 import type { ParsedReport, ReportType, RunSummary, TriggerSource } from "../types.js";
 import { COMMON_EXPORT_COLUMNS, REPORT_COLUMN_MAP } from "../reports.js";
 import { UNASSIGNED_PROPERTY_NAME, UNASSIGNED_PROPERTY_SLUG } from "../utils/properties.js";
+import type { UserRole } from "../auth/AuthService.js";
+
+const APPROVED_SENDERS_STATE_KEY = "settings.approved_senders";
+const NETSUITE_CONNECTION_STATE_KEY = "settings.netsuite.connection";
+const NETSUITE_PRIVATE_KEY_STATE_KEY = "settings.netsuite.private_key_encrypted";
+const NETSUITE_LAST_TEST_STATE_KEY = "settings.netsuite.last_test";
+const NETSUITE_LAST_CATALOG_EXPORT_STATE_KEY = "settings.netsuite.last_catalog_export";
 
 interface AttachmentInsert {
   graphMessageId: string;
@@ -26,12 +33,74 @@ interface AttachmentUpdate {
   status?: string;
   propertyName?: string | null;
   propertySlug?: string | null;
+  ingestRunId?: number;
   reportType?: ReportType | null;
   reportTitle?: string | null;
   reportDate?: string | null;
   parseError?: string | null;
   parsedJsonPath?: string | null;
   quarantinePath?: string | null;
+}
+
+interface NetSuiteMonetaryMappingRecord {
+  propertySlug: string;
+  reportType: ReportType;
+  mappingKey: string;
+  groupLabel: string;
+  itemLabel: string;
+  amountField: string;
+  amountFieldLabel: string;
+  defaultPostingPolarity: string;
+  postingPolarity: string;
+  netsuiteGlCode: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastAttachmentId: number | null;
+  lastAttachmentName: string;
+  updatedAt: string;
+}
+
+interface NetSuitePostingDefaultsRecord {
+  propertySlug: string;
+  reportType: ReportType;
+  balancingGlCode: string;
+  externalIdPrefix: string;
+  memoTemplate: string;
+  subsidiaryId: string;
+  currencyId: string;
+  locationId: string;
+  departmentId: string;
+  classId: string;
+  updatedAt: string;
+}
+
+interface NetSuitePostingRunInsert {
+  id: string;
+  propertySlug: string;
+  propertyName: string | null;
+  reportType: ReportType;
+  reportTitle: string;
+  attachmentRecordId: number;
+  attachmentName: string;
+  reportDate: string | null;
+  status: "preview" | "submitted" | "failed";
+  externalId: string;
+  previewPayload: object;
+  netsuiteResponseSummary: string;
+  netsuiteResponsePayload: object | null;
+  errorMessage: string;
+  createdByUsername: string;
+  submittedAt: string | null;
+}
+
+interface NetSuitePostingRunUpdate {
+  status?: "preview" | "submitted" | "failed";
+  externalId?: string;
+  previewPayload?: object;
+  netsuiteResponseSummary?: string;
+  netsuiteResponsePayload?: object | null;
+  errorMessage?: string;
+  submittedAt?: string | null;
 }
 
 export class AppDatabase {
@@ -89,6 +158,7 @@ export class AppDatabase {
         graph_message_id TEXT PRIMARY KEY,
         internet_message_id TEXT,
         subject TEXT,
+        sender_email TEXT,
         received_at TEXT NOT NULL,
         web_link TEXT,
         has_attachments INTEGER NOT NULL DEFAULT 1,
@@ -135,6 +205,88 @@ export class AppDatabase {
         created_at TEXT NOT NULL,
         FOREIGN KEY (ingest_run_id) REFERENCES ingest_runs(id)
       );
+
+      CREATE TABLE IF NOT EXISTS app_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS app_sessions (
+        token TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS netsuite_monetary_mappings (
+        property_slug TEXT NOT NULL,
+        report_type TEXT NOT NULL,
+        mapping_key TEXT NOT NULL,
+        group_label TEXT NOT NULL DEFAULT '',
+        item_label TEXT NOT NULL DEFAULT '',
+        amount_field TEXT NOT NULL DEFAULT '',
+        amount_field_label TEXT NOT NULL DEFAULT '',
+        default_posting_polarity TEXT NOT NULL DEFAULT '',
+        posting_polarity TEXT NOT NULL DEFAULT '',
+        netsuite_gl_code TEXT NOT NULL DEFAULT '',
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        last_attachment_id INTEGER,
+        last_attachment_name TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (property_slug, report_type, mapping_key),
+        FOREIGN KEY (last_attachment_id) REFERENCES attachments(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS netsuite_posting_defaults (
+        property_slug TEXT NOT NULL,
+        report_type TEXT NOT NULL,
+        balancing_gl_code TEXT NOT NULL DEFAULT '',
+        external_id_prefix TEXT NOT NULL DEFAULT '',
+        memo_template TEXT NOT NULL DEFAULT '',
+        subsidiary_id TEXT NOT NULL DEFAULT '',
+        currency_id TEXT NOT NULL DEFAULT '',
+        location_id TEXT NOT NULL DEFAULT '',
+        department_id TEXT NOT NULL DEFAULT '',
+        class_id TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (property_slug, report_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS netsuite_posting_runs (
+        id TEXT PRIMARY KEY,
+        property_slug TEXT NOT NULL,
+        property_name TEXT,
+        report_type TEXT NOT NULL,
+        report_title TEXT NOT NULL DEFAULT '',
+        attachment_record_id INTEGER NOT NULL,
+        attachment_name TEXT NOT NULL DEFAULT '',
+        report_date TEXT,
+        status TEXT NOT NULL CHECK (status IN ('preview', 'submitted', 'failed')),
+        external_id TEXT NOT NULL DEFAULT '',
+        preview_payload TEXT NOT NULL DEFAULT '',
+        netsuite_response_summary TEXT NOT NULL DEFAULT '',
+        netsuite_response_payload TEXT NOT NULL DEFAULT '',
+        error_message TEXT NOT NULL DEFAULT '',
+        created_by_username TEXT NOT NULL DEFAULT '',
+        submitted_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (attachment_record_id) REFERENCES attachments(id) ON DELETE CASCADE
+      );
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_netsuite_monetary_mappings_property
+      ON netsuite_monetary_mappings (property_slug, report_type, item_label);
+
+      CREATE INDEX IF NOT EXISTS idx_netsuite_posting_runs_property
+      ON netsuite_posting_runs (property_slug, report_type, created_at DESC);
     `);
 
     for (const [reportType, columns] of Object.entries(REPORT_COLUMN_MAP)) {
@@ -169,6 +321,7 @@ export class AppDatabase {
 
     this.ensureColumn("attachments", "property_name", "TEXT");
     this.ensureColumn("attachments", "property_slug", "TEXT");
+    this.ensureColumn("messages", "sender_email", "TEXT");
     this.ensureColumn("export_history", "property_name", "TEXT");
     this.ensureColumn("export_history", "property_slug", "TEXT");
     for (const reportType of Object.keys(REPORT_COLUMN_MAP)) {
@@ -270,20 +423,103 @@ export class AppDatabase {
     `).run(key, value, now);
   }
 
+  getUserByUsername(username: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT id, username, password_hash, role, created_at, updated_at
+      FROM app_users
+      WHERE username = ?
+      LIMIT 1
+    `).get(username) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  getUserById(userId: number): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT id, username, password_hash, role, created_at, updated_at
+      FROM app_users
+      WHERE id = ?
+      LIMIT 1
+    `).get(userId) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  listUsers(): Array<Record<string, unknown>> {
+    return this.db.prepare(`
+      SELECT id, username, role, created_at
+      FROM app_users
+      ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, username ASC
+    `).all() as Array<Record<string, unknown>>;
+  }
+
+  createUser(username: string, passwordHash: string, role: UserRole): number {
+    const now = new Date().toISOString();
+    const result = this.db.prepare(`
+      INSERT INTO app_users (username, password_hash, role, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(username, passwordHash, role, now, now);
+
+    return Number(result.lastInsertRowid);
+  }
+
+  updateUserPasswordHash(userId: number, passwordHash: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE app_users
+      SET password_hash = ?, updated_at = ?
+      WHERE id = ?
+    `).run(passwordHash, now, userId);
+  }
+
+  deleteUser(userId: number): void {
+    this.db.prepare(`DELETE FROM app_users WHERE id = ?`).run(userId);
+  }
+
+  createSession(token: string, userId: number, expiresAt: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO app_sessions (token, user_id, expires_at, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(token, userId, expiresAt, now);
+  }
+
+  getSessionUser(token: string, now: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT u.id, u.username, u.role
+      FROM app_sessions s
+      INNER JOIN app_users u ON u.id = s.user_id
+      WHERE s.token = ? AND s.expires_at > ?
+      LIMIT 1
+    `).get(token, now) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  deleteSession(token: string): void {
+    this.db.prepare(`DELETE FROM app_sessions WHERE token = ?`).run(token);
+  }
+
+  deleteExpiredSessions(now: string): void {
+    this.db.prepare(`DELETE FROM app_sessions WHERE expires_at <= ?`).run(now);
+  }
+
   upsertMessage(message: {
     graphMessageId: string;
     internetMessageId: string | null;
     subject: string | null;
+    senderEmail: string | null;
     receivedAt: string;
     webLink: string | null;
   }): void {
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO messages (graph_message_id, internet_message_id, subject, received_at, web_link, has_attachments, last_seen_at)
-      VALUES (?, ?, ?, ?, ?, 1, ?)
+      INSERT INTO messages (graph_message_id, internet_message_id, subject, sender_email, received_at, web_link, has_attachments, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?)
       ON CONFLICT(graph_message_id) DO UPDATE SET
         internet_message_id = excluded.internet_message_id,
         subject = excluded.subject,
+        sender_email = excluded.sender_email,
         received_at = excluded.received_at,
         web_link = excluded.web_link,
         last_seen_at = excluded.last_seen_at
@@ -291,10 +527,348 @@ export class AppDatabase {
       message.graphMessageId,
       message.internetMessageId,
       message.subject,
+      message.senderEmail,
       message.receivedAt,
       message.webLink,
       now
     );
+  }
+
+  getApprovedSenderPatterns(): string[] | null {
+    const raw = this.getState(APPROVED_SENDERS_STATE_KEY);
+    if (raw === null) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+
+      return parsed
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim().toLowerCase())
+        .filter((entry) => entry.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  setApprovedSenderPatterns(patterns: string[]): void {
+    this.setState(APPROVED_SENDERS_STATE_KEY, JSON.stringify(patterns));
+  }
+
+  getNetSuiteConnectionSettings(): Record<string, unknown> | null {
+    return this.getJsonState(NETSUITE_CONNECTION_STATE_KEY);
+  }
+
+  setNetSuiteConnectionSettings(settings: object): void {
+    this.setState(NETSUITE_CONNECTION_STATE_KEY, JSON.stringify(settings));
+  }
+
+  getNetSuiteEncryptedPrivateKey(): string | null {
+    return this.getState(NETSUITE_PRIVATE_KEY_STATE_KEY);
+  }
+
+  setNetSuiteEncryptedPrivateKey(value: string | null): void {
+    this.setState(NETSUITE_PRIVATE_KEY_STATE_KEY, value);
+  }
+
+  getNetSuiteLastTest(): Record<string, unknown> | null {
+    return this.getJsonState(NETSUITE_LAST_TEST_STATE_KEY);
+  }
+
+  setNetSuiteLastTest(result: object | null): void {
+    this.setState(NETSUITE_LAST_TEST_STATE_KEY, result ? JSON.stringify(result) : null);
+  }
+
+  getNetSuiteLastCatalogExport(): Record<string, unknown> | null {
+    return this.getJsonState(NETSUITE_LAST_CATALOG_EXPORT_STATE_KEY);
+  }
+
+  setNetSuiteLastCatalogExport(result: object | null): void {
+    this.setState(NETSUITE_LAST_CATALOG_EXPORT_STATE_KEY, result ? JSON.stringify(result) : null);
+  }
+
+  listNetSuitePostingPropertySummaries(reportTypes: ReportType[]): Array<Record<string, unknown>> {
+    if (reportTypes.length === 0) {
+      return [];
+    }
+
+    const placeholders = buildSqlPlaceholders(reportTypes.length);
+    return this.db.prepare(`
+      SELECT
+        COALESCE(property_slug, '${UNASSIGNED_PROPERTY_SLUG}') AS property_slug,
+        COALESCE(MAX(NULLIF(property_name, '')), '${UNASSIGNED_PROPERTY_NAME}') AS property_name,
+        COUNT(*) AS attachment_count,
+        MAX(received_at) AS last_received_at
+      FROM attachments
+      WHERE status = 'parsed'
+        AND report_type IN (${placeholders})
+      GROUP BY COALESCE(property_slug, '${UNASSIGNED_PROPERTY_SLUG}')
+      ORDER BY property_name
+    `).all(...reportTypes) as Array<Record<string, unknown>>;
+  }
+
+  getNetSuiteMonetaryMappings(propertySlug: string, reportType: ReportType): Array<Record<string, unknown>> {
+    return this.db.prepare(`
+      SELECT
+        property_slug,
+        report_type,
+        mapping_key,
+        group_label,
+        item_label,
+        amount_field,
+        amount_field_label,
+        default_posting_polarity,
+        posting_polarity,
+        netsuite_gl_code,
+        first_seen_at,
+        last_seen_at,
+        last_attachment_id,
+        last_attachment_name,
+        updated_at
+      FROM netsuite_monetary_mappings
+      WHERE property_slug = ? AND report_type = ?
+      ORDER BY group_label, item_label, amount_field_label, mapping_key
+    `).all(propertySlug, reportType) as Array<Record<string, unknown>>;
+  }
+
+  upsertNetSuiteMonetaryMappings(records: NetSuiteMonetaryMappingRecord[]): void {
+    if (records.length === 0) {
+      return;
+    }
+
+    const statement = this.db.prepare(`
+      INSERT INTO netsuite_monetary_mappings (
+        property_slug,
+        report_type,
+        mapping_key,
+        group_label,
+        item_label,
+        amount_field,
+        amount_field_label,
+        default_posting_polarity,
+        posting_polarity,
+        netsuite_gl_code,
+        first_seen_at,
+        last_seen_at,
+        last_attachment_id,
+        last_attachment_name,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(property_slug, report_type, mapping_key) DO UPDATE SET
+        group_label = excluded.group_label,
+        item_label = excluded.item_label,
+        amount_field = excluded.amount_field,
+        amount_field_label = excluded.amount_field_label,
+        default_posting_polarity = excluded.default_posting_polarity,
+        posting_polarity = excluded.posting_polarity,
+        netsuite_gl_code = excluded.netsuite_gl_code,
+        first_seen_at = MIN(netsuite_monetary_mappings.first_seen_at, excluded.first_seen_at),
+        last_seen_at = excluded.last_seen_at,
+        last_attachment_id = excluded.last_attachment_id,
+        last_attachment_name = excluded.last_attachment_name,
+        updated_at = excluded.updated_at
+    `);
+
+    this.db.exec("BEGIN");
+    try {
+      for (const record of records) {
+        statement.run(
+          record.propertySlug,
+          record.reportType,
+          record.mappingKey,
+          record.groupLabel,
+          record.itemLabel,
+          record.amountField,
+          record.amountFieldLabel,
+          record.defaultPostingPolarity,
+          record.postingPolarity,
+          record.netsuiteGlCode,
+          record.firstSeenAt,
+          record.lastSeenAt,
+          record.lastAttachmentId,
+          record.lastAttachmentName,
+          record.updatedAt
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getNetSuitePostingDefaults(propertySlug: string, reportType: ReportType): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT
+        property_slug,
+        report_type,
+        balancing_gl_code,
+        external_id_prefix,
+        memo_template,
+        subsidiary_id,
+        currency_id,
+        location_id,
+        department_id,
+        class_id,
+        updated_at
+      FROM netsuite_posting_defaults
+      WHERE property_slug = ? AND report_type = ?
+    `).get(propertySlug, reportType) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  saveNetSuitePostingDefaults(record: NetSuitePostingDefaultsRecord): void {
+    this.db.prepare(`
+      INSERT INTO netsuite_posting_defaults (
+        property_slug,
+        report_type,
+        balancing_gl_code,
+        external_id_prefix,
+        memo_template,
+        subsidiary_id,
+        currency_id,
+        location_id,
+        department_id,
+        class_id,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(property_slug, report_type) DO UPDATE SET
+        balancing_gl_code = excluded.balancing_gl_code,
+        external_id_prefix = excluded.external_id_prefix,
+        memo_template = excluded.memo_template,
+        subsidiary_id = excluded.subsidiary_id,
+        currency_id = excluded.currency_id,
+        location_id = excluded.location_id,
+        department_id = excluded.department_id,
+        class_id = excluded.class_id,
+        updated_at = excluded.updated_at
+    `).run(
+      record.propertySlug,
+      record.reportType,
+      record.balancingGlCode,
+      record.externalIdPrefix,
+      record.memoTemplate,
+      record.subsidiaryId,
+      record.currencyId,
+      record.locationId,
+      record.departmentId,
+      record.classId,
+      record.updatedAt
+    );
+  }
+
+  insertNetSuitePostingRun(record: NetSuitePostingRunInsert): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO netsuite_posting_runs (
+        id,
+        property_slug,
+        property_name,
+        report_type,
+        report_title,
+        attachment_record_id,
+        attachment_name,
+        report_date,
+        status,
+        external_id,
+        preview_payload,
+        netsuite_response_summary,
+        netsuite_response_payload,
+        error_message,
+        created_by_username,
+        submitted_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.propertySlug,
+      record.propertyName,
+      record.reportType,
+      record.reportTitle,
+      record.attachmentRecordId,
+      record.attachmentName,
+      record.reportDate,
+      record.status,
+      record.externalId,
+      JSON.stringify(record.previewPayload),
+      record.netsuiteResponseSummary,
+      record.netsuiteResponsePayload ? JSON.stringify(record.netsuiteResponsePayload) : "",
+      record.errorMessage,
+      record.createdByUsername,
+      record.submittedAt,
+      now,
+      now
+    );
+  }
+
+  updateNetSuitePostingRun(runId: string, update: NetSuitePostingRunUpdate): void {
+    const current = this.getNetSuitePostingRun(runId);
+    if (!current) {
+      throw new Error(`NetSuite posting run ${runId} was not found.`);
+    }
+
+    const status = update.status ?? String(current.status || "preview");
+    const externalId = update.externalId ?? String(current.external_id || "");
+    const previewPayload = Object.prototype.hasOwnProperty.call(update, "previewPayload")
+      ? JSON.stringify(update.previewPayload ?? {})
+      : String(current.preview_payload || "");
+    const netsuiteResponseSummary = update.netsuiteResponseSummary ?? String(current.netsuite_response_summary || "");
+    const netsuiteResponsePayload = Object.prototype.hasOwnProperty.call(update, "netsuiteResponsePayload")
+      ? JSON.stringify(update.netsuiteResponsePayload ?? {})
+      : String(current.netsuite_response_payload || "");
+    const errorMessage = update.errorMessage ?? String(current.error_message || "");
+    const submittedAt = Object.prototype.hasOwnProperty.call(update, "submittedAt")
+      ? (update.submittedAt ?? null)
+      : (typeof current.submitted_at === "string" && current.submitted_at ? current.submitted_at : null);
+
+    this.db.prepare(`
+      UPDATE netsuite_posting_runs
+      SET status = ?,
+          external_id = ?,
+          preview_payload = ?,
+          netsuite_response_summary = ?,
+          netsuite_response_payload = ?,
+          error_message = ?,
+          submitted_at = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      status,
+      externalId,
+      previewPayload,
+      netsuiteResponseSummary,
+      netsuiteResponsePayload,
+      errorMessage,
+      submittedAt,
+      new Date().toISOString(),
+      runId
+    );
+  }
+
+  getNetSuitePostingRun(runId: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM netsuite_posting_runs
+      WHERE id = ?
+    `).get(runId) as Record<string, unknown> | undefined;
+
+    return row ?? null;
+  }
+
+  listNetSuitePostingRuns(propertySlug: string, reportType: ReportType, limit = 10): Array<Record<string, unknown>> {
+    return this.db.prepare(`
+      SELECT *
+      FROM netsuite_posting_runs
+      WHERE property_slug = ? AND report_type = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `).all(propertySlug, reportType, limit) as Array<Record<string, unknown>>;
   }
 
   getAttachmentRecord(graphMessageId: string, graphAttachmentId: string): Record<string, unknown> | null {
@@ -302,6 +876,28 @@ export class AppDatabase {
       SELECT * FROM attachments WHERE graph_message_id = ? AND graph_attachment_id = ?
     `).get(graphMessageId, graphAttachmentId) as Record<string, unknown> | undefined;
     return row ?? null;
+  }
+
+  listAttachmentsForReparse(): Array<Record<string, unknown>> {
+    return this.db.prepare(`
+      SELECT
+        id,
+        graph_message_id,
+        graph_attachment_id,
+        internet_message_id,
+        source_mailbox,
+        received_at,
+        attachment_name,
+        property_name,
+        property_slug,
+        extension,
+        content_type,
+        archived_path,
+        report_title,
+        report_date
+      FROM attachments
+      ORDER BY received_at, id
+    `).all() as Array<Record<string, unknown>>;
   }
 
   insertAttachment(input: AttachmentInsert): number {
@@ -373,7 +969,7 @@ export class AppDatabase {
       pickAttachmentUpdateValue(input, "parseError", current.parse_error),
       pickAttachmentUpdateValue(input, "parsedJsonPath", current.parsed_json_path),
       pickAttachmentUpdateValue(input, "quarantinePath", current.quarantine_path),
-      Number(current.last_ingest_run_id),
+      pickAttachmentUpdateValue(input, "ingestRunId", current.last_ingest_run_id),
       now,
       recordId
     );
@@ -536,6 +1132,7 @@ export class AppDatabase {
         MAX(received_at) AS last_received_at
       FROM attachments
       GROUP BY COALESCE(property_slug, '${UNASSIGNED_PROPERTY_SLUG}')
+      HAVING SUM(CASE WHEN status IN ('parsed', 'deferred') THEN 1 ELSE 0 END) > 0
       ORDER BY property_name
     `).all() as Array<Record<string, unknown>>;
   }
@@ -553,6 +1150,7 @@ export class AppDatabase {
       FROM attachments
       WHERE COALESCE(property_slug, ?) = ?
       GROUP BY COALESCE(property_slug, ?)
+      HAVING SUM(CASE WHEN status IN ('parsed', 'deferred') THEN 1 ELSE 0 END) > 0
     `).get(
       UNASSIGNED_PROPERTY_SLUG,
       UNASSIGNED_PROPERTY_NAME,
@@ -627,6 +1225,20 @@ export class AppDatabase {
           WHERE attachment_record_id = ?
         `).run(attachmentRecordId);
       }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  clearDerivedReportData(): void {
+    this.db.exec("BEGIN");
+    try {
+      for (const reportType of Object.keys(REPORT_COLUMN_MAP)) {
+        this.db.exec(`DELETE FROM ${reportType};`);
+      }
+      this.db.exec("DELETE FROM export_history;");
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -715,6 +1327,25 @@ export class AppDatabase {
         `).run(nextName, nextSlug, UNASSIGNED_PROPERTY_SLUG, currentSlug);
       }
 
+      this.db.prepare(`
+        UPDATE netsuite_monetary_mappings
+        SET property_slug = ?
+        WHERE property_slug = ?
+      `).run(nextSlug, currentSlug);
+
+      this.db.prepare(`
+        UPDATE netsuite_posting_defaults
+        SET property_slug = ?
+        WHERE property_slug = ?
+      `).run(nextSlug, currentSlug);
+
+      this.db.prepare(`
+        UPDATE netsuite_posting_runs
+        SET property_slug = ?,
+            property_name = COALESCE(?, property_name)
+        WHERE property_slug = ?
+      `).run(nextSlug, nextName, currentSlug);
+
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -729,6 +1360,20 @@ export class AppDatabase {
     }
 
     this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  private getJsonState(key: string): Record<string, unknown> | null {
+    const raw = this.getState(key);
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -779,6 +1424,10 @@ function buildFallbackDatabasePath(databasePath: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const parsed = path.parse(databasePath);
   return path.join(parsed.dir, `${parsed.name}.recovery-${stamp}${parsed.ext}`);
+}
+
+function buildSqlPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => "?").join(", ");
 }
 
 function openInitializedDatabase(databasePath: string): AppDatabase {

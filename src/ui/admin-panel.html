@@ -10,16 +10,22 @@
   <main class="shell">
     <section class="hero">
       <div class="hero-copy">
-        <div class="eyebrow">Eternal Hotels | Mailbox Ingestion Console</div>
+        <div class="eyebrow">Eternal Hotels | Hospitality Reporting</div>
         <h1>Synchro HRM Console</h1>
-        <p class="subhead">Monitor the auditor mailbox and run PDF ingestion on demand.</p>
+        <p class="subhead">Monitor auditor mail flow, property report intake, and staging exports through one branded operations console.</p>
+      </div>
+      <div class="hero-brand" aria-hidden="true">
+        <img class="hero-brand-logo" src="/login-logo.png" alt="">
       </div>
       <div class="user-pill visible">
         <div class="hero-actions">
           <button id="refresh-button" class="secondary">Refresh</button>
+          <button id="reparse-button" class="secondary">Reparse Stored Reports</button>
           <button id="run-button" class="primary">Run Inbox Sync</button>
+          <button id="logout-button" class="secondary">Sign Out</button>
         </div>
         <div id="hero-status" class="hero-status">Loading dashboard...</div>
+        <div id="hero-account" class="hero-account">Checking session...</div>
       </div>
     </section>
 
@@ -27,29 +33,47 @@
       <aside class="side-nav panel">
         <div class="side-nav-head">
           <h2>Console</h2>
-          <p class="subhead">Synchro ERM styling, retargeted for HRM mailbox processing.</p>
+          <p class="subhead">Built for Eternal Hotels teams handling reporting, audit visibility, and clean operational follow-through.</p>
         </div>
         <nav class="side-tabs">
-          <a class="tab-link" href="#overview">Overview</a>
-          <a class="tab-link" href="#properties">Properties</a>
-          <a class="tab-link" href="#latest-run">Latest Run</a>
-          <a class="tab-link" href="#scope">Scope</a>
+          <a class="tab-link active" href="#overview" data-page-link="overview" aria-current="page">Overview</a>
+          <a class="tab-link" href="#properties" data-page-link="properties">Properties</a>
+          <a class="tab-link" href="#netsuite" data-page-link="netsuite">NetSuite</a>
+          <a class="tab-link" href="#scope" data-page-link="scope">Scope</a>
+          <a class="tab-link" href="#settings" data-page-link="settings">Settings</a>
         </nav>
       </aside>
 
       <div class="app-main">
-        <section id="overview" class="panel">
-          <div class="panel-head">
-            <div>
-              <div class="eyebrow muted">Runtime</div>
-              <h2>Service Overview</h2>
+        <section id="overview" class="page-view is-active" data-page="overview">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow muted">Runtime</div>
+                <h2>Service Overview</h2>
+              </div>
+              <div id="overview-stamp" class="badge">Waiting for data</div>
             </div>
-            <div id="overview-stamp" class="badge">Waiting for data</div>
-          </div>
-          <div id="overview-grid" class="stat-grid"></div>
+            <div id="overview-grid" class="stat-grid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow muted">Operations</div>
+                <h2>Latest Run</h2>
+              </div>
+              <div id="latest-run-badge" class="badge">No runs yet</div>
+            </div>
+            <div id="run-summary-grid" class="metric-grid"></div>
+            <div class="panel-body">
+              <div id="run-notes" class="notes-block empty">No run notes yet.</div>
+              <div id="attachment-list" class="list-grid"></div>
+            </div>
+          </section>
         </section>
 
-        <section id="properties" class="panel">
+        <section id="properties" class="panel page-view" data-page="properties" hidden>
           <div class="panel-head">
             <div>
               <div class="eyebrow muted">Portfolio</div>
@@ -60,22 +84,7 @@
           <div id="property-list" class="card-grid"></div>
         </section>
 
-        <section id="latest-run" class="panel">
-          <div class="panel-head">
-            <div>
-              <div class="eyebrow muted">Operations</div>
-              <h2>Latest Run</h2>
-            </div>
-            <div id="latest-run-badge" class="badge">No runs yet</div>
-          </div>
-          <div id="run-summary-grid" class="metric-grid"></div>
-          <div class="panel-body">
-            <div id="run-notes" class="notes-block empty">No run notes yet.</div>
-            <div id="attachment-list" class="list-grid"></div>
-          </div>
-        </section>
-
-        <section id="scope" class="panel">
+        <section id="scope" class="panel page-view" data-page="scope" hidden>
           <div class="panel-head">
             <div>
               <div class="eyebrow muted">Current Scope</div>
@@ -85,7 +94,7 @@
           <div class="panel-body scope-grid">
             <div class="scope-card">
               <strong>Mailbox polling</strong>
-              <p>App-only Microsoft Graph access against the `Inbox` for `auditor@eternalhotels.com` with incremental delta sync.</p>
+              <p>App-only Microsoft Graph access against the `Inbox` for `auditor@eternalhotels.com`. Scheduled polling stays incremental, while manual sync runs do a full Inbox rescan for backfill.</p>
             </div>
             <div class="scope-card">
               <strong>Parsing behavior</strong>
@@ -99,6 +108,210 @@
               <strong>Next lifecycle step</strong>
               <p>The generated CSVs are property-scoped staging outputs for a later NetSuite REST integration, not final NetSuite payloads yet.</p>
             </div>
+          </div>
+        </section>
+
+        <section id="netsuite" class="panel page-view" data-page="netsuite" hidden>
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow muted">Accounting</div>
+              <h2>NetSuite Monetary Posting</h2>
+              <p class="subhead">Choose a property, load a supported monetary report, save GL and polarity setup, then build and submit a balanced journal preview.</p>
+            </div>
+            <div class="badge">Phase 1: Monetary items</div>
+          </div>
+          <div class="panel-body netsuite-page-layout">
+            <section class="settings-card netsuite-property-rail">
+              <div class="modal-section-head">
+                <div>
+                  <h3>Properties</h3>
+                  <p class="subhead">Only properties with parsed monetary report families appear here.</p>
+                </div>
+              </div>
+              <div id="netsuite-property-status" class="form-status empty">Loading NetSuite properties...</div>
+              <div id="netsuite-property-list" class="list-grid"></div>
+            </section>
+
+            <section class="settings-card settings-card-wide">
+              <div class="modal-section-head">
+                <div>
+                  <h3>Posting Workspace</h3>
+                  <p class="subhead">This first pass mirrors the original Synchro posting cycle on one hotel report attachment at a time.</p>
+                </div>
+              </div>
+              <div id="netsuite-workspace-empty" class="empty">Select a property to load its NetSuite posting workspace.</div>
+              <div id="netsuite-workspace" class="netsuite-workspace" hidden>
+                <div id="netsuite-workspace-summary" class="metric-grid"></div>
+
+                <form id="netsuite-posting-form" class="property-form">
+                  <label class="form-field">
+                    <span>Source attachment</span>
+                    <select id="netsuite-attachment-select"></select>
+                  </label>
+                  <label class="form-field">
+                    <span>External ID prefix</span>
+                    <input id="netsuite-posting-external-prefix" type="text" placeholder="Defaults to the property slug">
+                  </label>
+                  <label class="form-field">
+                    <span>Balancing GL code</span>
+                    <input id="netsuite-posting-balancing-gl" type="text" placeholder="Used when the preview does not net to zero">
+                  </label>
+                  <label class="form-field">
+                    <span>Memo template</span>
+                    <input id="netsuite-posting-memo-template" type="text" placeholder="Supports {propertyName}, {reportTitle}, {reportDate}, and more">
+                  </label>
+                  <label class="form-field">
+                    <span>Subsidiary ID</span>
+                    <input id="netsuite-posting-subsidiary-id" type="text" placeholder="Optional NetSuite internal ID">
+                  </label>
+                  <label class="form-field">
+                    <span>Currency ID</span>
+                    <input id="netsuite-posting-currency-id" type="text" placeholder="Optional NetSuite internal ID">
+                  </label>
+                  <label class="form-field">
+                    <span>Location ID</span>
+                    <input id="netsuite-posting-location-id" type="text" placeholder="Optional NetSuite internal ID">
+                  </label>
+                  <label class="form-field">
+                    <span>Department ID</span>
+                    <input id="netsuite-posting-department-id" type="text" placeholder="Optional NetSuite internal ID">
+                  </label>
+                  <label class="form-field">
+                    <span>Class ID</span>
+                    <input id="netsuite-posting-class-id" type="text" placeholder="Optional NetSuite internal ID">
+                  </label>
+                  <div class="toolbar-row">
+                    <button id="netsuite-posting-refresh-button" class="secondary" type="button">Refresh Discovery</button>
+                    <button id="netsuite-posting-save-button" class="secondary" type="submit">Save Setup</button>
+                    <button id="netsuite-posting-preview-button" class="primary" type="button">Build Preview</button>
+                    <button id="netsuite-posting-submit-button" class="primary" type="button">Submit To NetSuite</button>
+                  </div>
+                </form>
+
+                <div id="netsuite-posting-status" class="form-status empty">No NetSuite posting actions yet.</div>
+                <div id="netsuite-posting-mapping-summary" class="notes-block empty">No monetary items loaded yet.</div>
+                <div id="netsuite-posting-mappings" class="report-table-wrap"></div>
+                <div id="netsuite-posting-preview" class="report-body"></div>
+                <div id="netsuite-posting-runs" class="report-body"></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="settings" class="panel page-view" data-page="settings" hidden>
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow muted">Configuration</div>
+              <h2>Settings</h2>
+            </div>
+            <div id="settings-badge" class="badge">Admin only</div>
+          </div>
+          <div class="panel-body settings-grid">
+            <section class="settings-card">
+              <div class="modal-section-head">
+                <div>
+                  <h3>Approved Senders</h3>
+                  <p class="subhead">Only attachments from these sender addresses are accepted for parsing. Use one value per line, wildcard domains like *@eternalhotels.com, or exact addresses like parn.singh@outlook.com.</p>
+                </div>
+              </div>
+              <form id="approved-senders-form" class="property-form">
+                <label class="form-field">
+                  <span>Approved sender list</span>
+                  <textarea id="approved-senders-input" name="approvedSenders" rows="8" placeholder="*@eternalhotels.com&#10;*@redlionpasco.com&#10;parn.singh@outlook.com"></textarea>
+                </label>
+                <div class="toolbar-row">
+                  <button id="approved-senders-save-button" class="primary" type="submit">Save Approved Senders</button>
+                </div>
+                <div id="approved-senders-status" class="form-status empty">No sender allowlist changes yet.</div>
+              </form>
+            </section>
+
+            <section class="settings-card settings-card-wide">
+              <div class="modal-section-head">
+                <div>
+                  <h3>NetSuite Connector</h3>
+                  <p class="subhead">Store the account-specific SuiteTalk REST connection details here, run a proof-of-life SuiteQL query to confirm the NetSuite API is reachable, and export record metadata for mapping work.</p>
+                </div>
+              </div>
+              <form id="netsuite-settings-form" class="property-form">
+                <label class="form-field">
+                  <span>SuiteTalk REST base URL</span>
+                  <input id="netsuite-service-base-url-input" name="serviceBaseUrl" type="url" placeholder="https://1234567.suitetalk.api.netsuite.com" required>
+                </label>
+                <label class="form-field">
+                  <span>Client ID</span>
+                  <input id="netsuite-client-id-input" name="clientId" type="text" placeholder="Paste the NetSuite integration client ID" required>
+                </label>
+                <label class="form-field">
+                  <span>Certificate ID</span>
+                  <input id="netsuite-certificate-id-input" name="certificateId" type="text" placeholder="Paste the NetSuite OAuth 2.0 certificate ID" required>
+                </label>
+                <label class="form-field">
+                  <span>JWT algorithm</span>
+                  <select id="netsuite-jwt-algorithm-input" name="jwtAlgorithm">
+                    <option value="PS256">PS256</option>
+                    <option value="PS384">PS384</option>
+                    <option value="PS512">PS512</option>
+                    <option value="ES256">ES256</option>
+                    <option value="ES384">ES384</option>
+                    <option value="ES512">ES512</option>
+                  </select>
+                </label>
+                <label class="form-field">
+                  <span>Proof-of-life SuiteQL query</span>
+                  <textarea id="netsuite-probe-query-input" name="probeQuery" rows="6" placeholder="SELECT id FROM account"></textarea>
+                </label>
+                <label class="form-field">
+                  <span>Private key PEM</span>
+                  <textarea id="netsuite-private-key-input" name="privateKeyPem" rows="8" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea>
+                </label>
+                <div class="form-help">Leave the private key blank when you only want to update the non-secret fields. Use Clear Saved Key to remove the encrypted key already stored on the server.</div>
+                <div id="netsuite-key-status" class="form-status empty">Checking saved key status...</div>
+                <div class="toolbar-row">
+                  <button id="netsuite-save-button" class="primary" type="submit">Save NetSuite Settings</button>
+                  <button id="netsuite-test-button" class="secondary" type="button">Test Connection</button>
+                  <button id="netsuite-clear-key-button" class="secondary" type="button">Clear Saved Key</button>
+                  <button id="netsuite-export-catalog-button" class="secondary" type="button">Export Metadata Catalog CSV</button>
+                </div>
+                <div id="netsuite-settings-status" class="form-status empty">No NetSuite connector changes yet.</div>
+                <div id="netsuite-last-test" class="form-status empty">No NetSuite proof-of-life checks have been recorded yet.</div>
+                <div id="netsuite-last-catalog-export" class="form-status empty">No NetSuite metadata catalog exports have been recorded yet.</div>
+                <a id="netsuite-catalog-download-link" class="export-link" href="/api/settings/netsuite/debug/metadata-catalog/latest" download hidden>Download Latest Metadata Catalog CSV</a>
+              </form>
+            </section>
+
+            <section class="settings-card">
+              <div class="modal-section-head">
+                <div>
+                  <h3>Viewer Access</h3>
+                  <p class="subhead">Create read-and-operate viewer accounts for the HRM console. Viewers can use the app but cannot access this page.</p>
+                </div>
+              </div>
+              <form id="viewer-user-form" class="property-form">
+                <label class="form-field">
+                  <span>Viewer username</span>
+                  <input id="viewer-username-input" name="username" type="text" placeholder="viewer.ops" required>
+                </label>
+                <label class="form-field">
+                  <span>Temporary password</span>
+                  <input id="viewer-password-input" name="password" type="password" placeholder="At least 8 characters" required>
+                </label>
+                <div class="toolbar-row">
+                  <button id="viewer-create-button" class="primary" type="submit">Add Viewer</button>
+                </div>
+                <div id="viewer-form-status" class="form-status empty">No account changes yet.</div>
+              </form>
+            </section>
+
+            <section class="settings-card">
+              <div class="modal-section-head">
+                <div>
+                  <h3>Current Users</h3>
+                  <p class="subhead">The `admin` account stays permanent, and you can rotate passwords here whenever needed. Viewer accounts can still be removed at any time.</p>
+                </div>
+              </div>
+              <div id="viewer-user-list" class="list-grid"></div>
+            </section>
           </div>
         </section>
       </div>

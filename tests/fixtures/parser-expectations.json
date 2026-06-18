@@ -64,6 +64,50 @@
       "company_group_note": "Expedia"
     }
   },
+  "RoomAndTaxReport.pdf": {
+    "reportType": "room_tax_listing_rows",
+    "rowCount": 54,
+    "firstRow": {
+      "room_number": "101-A",
+      "guest_name": "Erdahl,Douglas",
+      "confirmation_no": "204386",
+      "arrival_date": "2026-05-20",
+      "payment_method": "Credit Card"
+    }
+  },
+  "TransactionLogReport.pdf": {
+    "reportType": "daily_transaction_log_rows",
+    "rowCount": 188,
+    "firstRow": {
+      "transaction_code": "7A",
+      "transaction_id": "847131",
+      "confirmation_no": "739632244-01",
+      "reference_value": "1382 - 145635",
+      "clerk_name": "shafer"
+    }
+  },
+  "CreditCardBatchReport.pdf": {
+    "reportType": "credit_card_transaction_rows",
+    "rowCount": 48,
+    "firstRow": {
+      "card_type": "AX",
+      "card_number_fragment": "2002",
+      "room_number": "111-A",
+      "confirmation_no": "319093745-03",
+      "guest_name": "THOMAS, GORDON"
+    }
+  },
+  "OperatorTransactionsReport.pdf": {
+    "reportType": "operator_transaction_rows",
+    "rowCount": 48,
+    "firstRow": {
+      "transaction_code": "7A",
+      "transaction_id": "847131",
+      "confirmation_no": "739632244-01",
+      "amount": "-1.00",
+      "transaction_time": "2:57 AM"
+    }
+  },
   "Zero Rate Rooms.PDF": {
     "reportType": "zero_rate_room_rows",
     "rowCount": 29,

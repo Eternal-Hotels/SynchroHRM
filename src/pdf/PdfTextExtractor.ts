@@ -1,4 +1,7 @@
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { getDocument, VerbosityLevel } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 export interface PdfWord {
   text: string;
@@ -20,6 +23,9 @@ export interface PdfDocumentText {
   lines: PdfLine[];
 }
 
+const require = createRequire(import.meta.url);
+const standardFontDataUrl = resolveStandardFontDataUrl();
+
 export async function extractPdfText(bytes: Buffer): Promise<PdfDocumentText> {
   const document = await getDocument({
     data: new Uint8Array(bytes),
@@ -27,7 +33,9 @@ export async function extractPdfText(bytes: Buffer): Promise<PdfDocumentText> {
     useWorkerFetch: false,
     disableFontFace: true,
     disableStream: true,
-    disableAutoFetch: true
+    disableAutoFetch: true,
+    standardFontDataUrl,
+    verbosity: VerbosityLevel.ERRORS
   } as never).promise;
 
   const lines: PdfLine[] = [];
@@ -64,6 +72,12 @@ export async function extractPdfText(bytes: Buffer): Promise<PdfDocumentText> {
     pageCount: document.numPages,
     lines
   };
+}
+
+function resolveStandardFontDataUrl(): string {
+  const packageRoot = dirname(require.resolve("pdfjs-dist/package.json"));
+  const directoryUrl = pathToFileURL(resolve(packageRoot, "standard_fonts")).href;
+  return directoryUrl.endsWith("/") ? directoryUrl : `${directoryUrl}/`;
 }
 
 function groupWordsIntoLines(pageNumber: number, words: PdfWord[]): PdfLine[] {

@@ -135,6 +135,15 @@ function buildParsedReport(
         propertySlug,
         rows: parseAllNightAuditReport(document)
       };
+    case "choice_audit_packet_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate: extractChoiceAuditPacketBusinessDate(document) ?? reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseChoiceAuditPacket(document)
+      };
     case "best_western_daily_report_rows":
       return {
         reportType,
@@ -143,6 +152,69 @@ function buildParsedReport(
         propertyName,
         propertySlug,
         rows: parseBestWesternDailyReport(document)
+      };
+    case "adjustment_refund_activity_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseAdjustmentRefundActivity(document)
+      };
+    case "all_transaction_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseAllTransactions(document)
+      };
+    case "room_tax_listing_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate: extractBestWesternBusinessDate(document) ?? reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseRoomTaxListing(document, extractBestWesternBusinessDate(document) ?? reportDate)
+      };
+    case "daily_transaction_log_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate: extractBestWesternBusinessDate(document) ?? reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseDailyTransactionLog(document, extractBestWesternBusinessDate(document) ?? reportDate)
+      };
+    case "credit_card_transaction_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate: extractBestWesternBusinessDate(document) ?? reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseCreditCardTransactions(document)
+      };
+    case "closed_folio_balance_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseClosedFolioBalances(document)
+      };
+    case "operator_transaction_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate: extractBestWesternBusinessDate(document) ?? reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseOperatorTransactions(document, extractBestWesternBusinessDate(document) ?? reportDate)
       };
     case "advance_deposit_activity_rows":
       return {
@@ -207,6 +279,15 @@ function buildParsedReport(
         propertySlug,
         rows: parseHotelStatistics(document)
       };
+    case "in_house_guest_folio_balance_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseInHouseGuestFolioBalances(document)
+      };
     case "maintenance_summary_rows":
       return {
         reportType,
@@ -234,6 +315,24 @@ function buildParsedReport(
         propertySlug,
         rows: parseRateOverride(document)
       };
+    case "rate_report_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseRateReport(document)
+      };
+    case "reservation_listing_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseReservationListing(document)
+      };
     case "tax_report_rows":
       return {
         reportType,
@@ -242,6 +341,15 @@ function buildParsedReport(
         propertyName,
         propertySlug,
         rows: parseTaxReport(document)
+      };
+    case "trial_balance_report_rows":
+      return {
+        reportType,
+        reportTitle: REPORT_TITLES[reportType],
+        reportDate,
+        propertyName,
+        propertySlug,
+        rows: parseTrialBalanceReport(document)
       };
     default:
       throw new UnsupportedReportError(`Unsupported report type: ${String(reportType)}`);
@@ -256,6 +364,31 @@ const ALL_NIGHT_AUDIT_STANDALONE_TITLES = [
   "Maintenance Activity",
   "No Show & Late Cancel",
   "Room Count Summary"
+] as const;
+
+const ALL_NIGHT_AUDIT_PACKET_TITLES = [
+  "Business on The Books",
+  "Cancellation List",
+  "Hotel Statistics",
+  "No Show Report",
+  "Rate Discrepancy Report",
+  "Reservation Activity Report"
+] as const;
+
+const CHOICE_AUDIT_PACKET_PAGE_TITLES = [
+  "A/R Aging",
+  "Advance Deposit Ledger",
+  "Cancellation List",
+  "City Tax Report",
+  "Complimentary Rooms Report",
+  "Final Transaction Closeout",
+  "Guest Ledger",
+  "Hotel Journal Detail",
+  "Hotel Journal Summary",
+  "Hotel Statistics",
+  "Ledger Summary",
+  "Revenue by Rate Code",
+  "Tax Exempt Report"
 ] as const;
 
 function detectReportType(document: PdfDocumentText): ReportType {
@@ -283,7 +416,10 @@ function detectReportType(document: PdfDocumentText): ReportType {
   if (firstPageText.includes("Rate Change Report")) {
     return "rate_change_rows";
   }
-  if (firstPageText.includes("Business on The Books") && document.lines.some((line) => line.text === "Reservation Activity Report")) {
+  if (isChoiceAuditPacket(document)) {
+    return "choice_audit_packet_rows";
+  }
+  if (isAllNightAuditPacket(document)) {
     return "all_night_audit_report_rows";
   }
   if (ALL_NIGHT_AUDIT_STANDALONE_TITLES.some((title) => firstPageText.includes(title))) {
@@ -291,6 +427,27 @@ function detectReportType(document: PdfDocumentText): ReportType {
   }
   if (firstPageText.includes("Daily Report") && firstPageText.includes("Statistical Recap")) {
     return "best_western_daily_report_rows";
+  }
+  if (firstPageText.includes("Adjustments and Refunds Activity")) {
+    return "adjustment_refund_activity_rows";
+  }
+  if (firstPageText.includes("All Transactions")) {
+    return "all_transaction_rows";
+  }
+  if (firstPageText.includes("Room & Tax Listing")) {
+    return "room_tax_listing_rows";
+  }
+  if (firstPageText.includes("Daily Transaction Log")) {
+    return "daily_transaction_log_rows";
+  }
+  if (firstPageText.includes("Credit Card Transactions")) {
+    return "credit_card_transaction_rows";
+  }
+  if (firstPageText.includes("Closed Folio Balances")) {
+    return "closed_folio_balance_rows";
+  }
+  if (firstPageText.includes("Operator Transactions")) {
+    return "operator_transaction_rows";
   }
   if (firstPageText.includes("Advance Deposit Activity")) {
     return "advance_deposit_activity_rows";
@@ -313,6 +470,9 @@ function detectReportType(document: PdfDocumentText): ReportType {
   if (firstPageText.includes("Hotel Statistics")) {
     return "hotel_statistics_metric_rows";
   }
+  if (firstPageText.includes("In House Guest Folio Balances")) {
+    return "in_house_guest_folio_balance_rows";
+  }
   if (firstPageText.includes("Maintenance Summary")) {
     return "maintenance_summary_rows";
   }
@@ -322,11 +482,45 @@ function detectReportType(document: PdfDocumentText): ReportType {
   if (firstPageText.includes("Rate Override")) {
     return "rate_override_rows";
   }
+  if (firstPageText.includes("Rate Report")) {
+    return "rate_report_rows";
+  }
+  if (firstPageText.includes("Reservations")) {
+    return "reservation_listing_rows";
+  }
   if (firstPageText.includes("Tax Report")) {
     return "tax_report_rows";
   }
+  if (firstPageText.includes("Trial Balance Report")) {
+    return "trial_balance_report_rows";
+  }
 
   throw new UnsupportedReportError("The PDF title does not match any known report family.");
+}
+
+function isChoiceAuditPacket(document: PdfDocumentText): boolean {
+  const titles = new Set(
+    document.lines
+      .map((line) => line.text.trim())
+      .filter((text): text is (typeof CHOICE_AUDIT_PACKET_PAGE_TITLES)[number] => (
+        CHOICE_AUDIT_PACKET_PAGE_TITLES.includes(text as (typeof CHOICE_AUDIT_PACKET_PAGE_TITLES)[number])
+      ))
+  );
+
+  return titles.has("A/R Aging")
+    && (titles.has("Advance Deposit Ledger") || titles.has("Hotel Journal Detail") || titles.has("Final Transaction Closeout"));
+}
+
+function isAllNightAuditPacket(document: PdfDocumentText): boolean {
+  const titles = new Set(
+    document.lines
+      .map((line) => line.text.trim())
+      .filter((text): text is (typeof ALL_NIGHT_AUDIT_PACKET_TITLES)[number] => (
+        ALL_NIGHT_AUDIT_PACKET_TITLES.includes(text as (typeof ALL_NIGHT_AUDIT_PACKET_TITLES)[number])
+      ))
+  );
+
+  return titles.has("Reservation Activity Report") && titles.size >= 2;
 }
 
 function extractReportDate(document: PdfDocumentText): string | null {
@@ -379,6 +573,27 @@ function parseDateToken(value: string): string | null {
   }
 
   return null;
+}
+
+function parseMonthDayWithReferenceYear(value: string | null | undefined, referenceDate: string | null): string | null {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const direct = parseShortDate(normalized);
+  if (direct) {
+    return direct;
+  }
+
+  const monthDay = normalized.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (!monthDay || !referenceDate) {
+    return null;
+  }
+
+  const [, rawMonth, rawDay] = monthDay;
+  const year = referenceDate.slice(0, 4);
+  return parseShortDate(`${rawMonth.padStart(2, "0")}/${rawDay.padStart(2, "0")}/${year}`);
 }
 
 function extractPropertyName(document: PdfDocumentText): string | null {
@@ -482,6 +697,64 @@ function extractAllNightAuditBusinessDate(document: PdfDocumentText): string | n
   }
 
   return null;
+}
+
+function extractChoiceAuditPacketBusinessDate(document: PdfDocumentText): string | null {
+  for (const line of document.lines.slice(0, 40)) {
+    const businessDate = line.text.match(/\bBusiness Date:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/i);
+    if (businessDate) {
+      return parseShortDate(businessDate[1]);
+    }
+
+    const dateRange = line.text.match(/\bDate Range:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/i);
+    if (dateRange) {
+      return parseShortDate(dateRange[1]);
+    }
+  }
+
+  return null;
+}
+
+function parseChoiceAuditPacket(document: PdfDocumentText): Array<Record<string, string | null>> {
+  const rows: Array<Record<string, string | null>> = [];
+  const pages = groupLinesByPage(document.lines);
+
+  for (const page of pages) {
+    const reportName = extractChoiceAuditPacketPageTitle(page);
+    if (!reportName) {
+      continue;
+    }
+
+    let section: string | null = null;
+    for (const line of page) {
+      const text = line.text.trim();
+      if (!text || isChoiceAuditPacketHeaderOrFooter(text, reportName)) {
+        continue;
+      }
+
+      if (isChoiceAuditPacketSectionLine(text)) {
+        section = text;
+        rows.push({
+          page_number: String(line.pageNumber),
+          report_name: reportName,
+          section,
+          row_kind: "section",
+          line_text: text
+        });
+        continue;
+      }
+
+      rows.push({
+        page_number: String(line.pageNumber),
+        report_name: reportName,
+        section,
+        row_kind: isChoiceAuditPacketTotalLine(text) ? "total" : "detail",
+        line_text: text
+      });
+    }
+  }
+
+  return rows;
 }
 
 function parseAllNightAuditReport(document: PdfDocumentText): Array<Record<string, string | null>> {
@@ -1169,6 +1442,75 @@ function hasPageTitle(lines: PdfLine[], title: string): boolean {
   return lines.some((line) => line.text.trim() === title);
 }
 
+function extractChoiceAuditPacketPageTitle(lines: PdfLine[]): string | null {
+  for (const line of lines) {
+    const text = line.text.trim();
+    if (
+      CHOICE_AUDIT_PACKET_PAGE_TITLES.includes(text as (typeof CHOICE_AUDIT_PACKET_PAGE_TITLES)[number])
+      || text === "Hotel Journal Summary"
+      || text === "Revenue by Rate Code"
+    ) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+function isChoiceAuditPacketHeaderOrFooter(text: string, reportName: string): boolean {
+  return text === reportName
+    || /^Property Name:/i.test(text)
+    || /^Business Date:/i.test(text)
+    || /^Date Range:/i.test(text)
+    || /^Date\/Time of Printing:/i.test(text)
+    || /^Data Complete as of:/i.test(text)
+    || /^Software Version:/i.test(text)
+    || /^Page \d+ of \d+/i.test(text)
+    || text.startsWith("Account Name Current")
+    || text.startsWith("Status Name Account Arrival Balance")
+    || text.startsWith("Account Guest Name Arrival Nights")
+    || text.startsWith("March April May")
+    || text.startsWith("Day Tax Adults")
+    || text.startsWith("Date Account Room Status")
+    || text.startsWith("Today's Totals")
+    || text.startsWith("Description (Transaction Code)")
+    || text.startsWith("Status Name Account Room Arrival Departure Balance")
+    || text.startsWith("Date Posting Date User ID")
+    || text === "ID Account Comment"
+    || text.startsWith("Room Statistics ")
+    || text.startsWith("Room Room Daily PTD Room PTD Room Room YTD Room YTD")
+    || text.startsWith("Rate Code Nights % Revenue % AVG")
+    || text === "Exempt Exempt Refund"
+    || text.startsWith("Date Account Room Name Company Guest Tax ID Arrival Departure Transaction Code Revenue Revenue")
+    || text === "Tax T1 T2 T3"
+    || text.startsWith("Current Tax Configuration")
+    || text === "*Calculations include Comp rooms";
+}
+
+function isChoiceAuditPacketSectionLine(text: string): boolean {
+  return text === "Guest Accounts"
+    || text === "Group Master Accounts"
+    || text === "In House Accounts"
+    || text === "Guest Ledger Summary"
+    || text === "No Show Revenue"
+    || text === "Tax Exempt Revenue Summary - By Tax:"
+    || /^Transaction Type:/i.test(text);
+}
+
+function isChoiceAuditPacketTotalLine(text: string): boolean {
+  return /^Grand Total:/i.test(text)
+    || /^Subtotal:/i.test(text)
+    || /^Totals:/i.test(text)
+    || /^Totals\b/i.test(text)
+    || /^Total Advance Deposits:/i.test(text)
+    || /^Total Comps:/i.test(text)
+    || /^Total Cancellations:/i.test(text)
+    || /^Total For /i.test(text)
+    || /^No Show Total:/i.test(text)
+    || /^Total:/i.test(text)
+    || /^Closing Balance:/i.test(text);
+}
+
 function splitAuditCell(value: string): [string | null, string | null] {
   const parts = value.split("/").map((part) => normalizeFlexibleNumeric(part)).filter((part) => part !== null);
   return [parts[0] ?? null, parts[1] ?? null];
@@ -1498,7 +1840,14 @@ function parseBestWesternDailyReport(document: PdfDocumentText): Array<Record<st
 function extractBestWesternBusinessDate(document: PdfDocumentText): string | null {
   for (const line of document.lines.filter((entry) => entry.pageNumber === 1).slice(0, 12)) {
     const text = line.text.trim();
-    if (/^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(text)) {
+    const namedShortDate = text.match(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/i);
+    if (namedShortDate) {
+      return parseShortDate(namedShortDate[1]);
+    }
+    if (
+      /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(text)
+      && !/\d{1,2}:\d{2}/.test(text)
+    ) {
       return parseShortDate(text);
     }
   }
@@ -1781,6 +2130,774 @@ function parseBestWesternDetailSummary(lines: PdfLine[]): Array<Record<string, s
   }
 
   return rows;
+}
+
+function parseRoomTaxListing(
+  document: PdfDocumentText,
+  referenceDate: string | null
+): Array<Record<string, string | null>> {
+  const rows: Array<Record<string, string | null>> = [];
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (
+      !text
+      || shouldSkipCommonLine(text)
+      || text === "Room & Tax Listing"
+      || text === "Revenue Tax Detail Report"
+      || text.startsWith("Room Guest Name Conf # Type Arrive Depart Rate Override Tax")
+      || text.startsWith("Code RM Trans ID Conf # Guest Name Revenue")
+      || text.startsWith("SUMMARY TOTALS")
+      || text.startsWith("Exempt Revenue")
+      || text.startsWith("Taxable Revenue")
+    ) {
+      continue;
+    }
+
+    const roomNumber = normalizeText(sliceText(line, 16, 48));
+    const chargeType = normalizeText(sliceText(line, 190, 244));
+    if (!roomNumber || !/^\d{2,4}-[A-Z]$/.test(roomNumber) || chargeType !== "Room And Tax") {
+      continue;
+    }
+
+    rows.push({
+      room_number: roomNumber,
+      guest_name: normalizeText(sliceText(line, 50, 146)),
+      confirmation_no: normalizeText(sliceText(line, 146, 194)),
+      charge_type: chargeType,
+      arrival_date: parseMonthDayWithReferenceYear(sliceText(line, 244, 278), referenceDate),
+      departure_date: parseMonthDayWithReferenceYear(sliceText(line, 278, 312), referenceDate),
+      rate_amount: normalizeAmount(sliceText(line, 364, 406)),
+      override_flag: normalizeText(sliceText(line, 424, 450)),
+      tax_amount: normalizeAmount(sliceText(line, 488, 530)),
+      package_name: normalizeText(sliceText(line, 530, 574)),
+      extra_1: normalizeText(sliceText(line, 574, 620)),
+      extra_2: normalizeText(sliceText(line, 620, 666)),
+      transfer_flag: normalizeText(sliceText(line, 666, 706)),
+      payment_method: normalizeText(sliceText(line, 706, 760))
+    });
+  }
+
+  return rows;
+}
+
+function parseDailyTransactionLog(
+  document: PdfDocumentText,
+  referenceDate: string | null
+): Array<Record<string, string | null>> {
+  const rows: Array<Record<string, string | null>> = [];
+  let prefixLine: PdfLine | null = null;
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (
+      !text
+      || shouldSkipCommonLine(text)
+      || /^Daily Transaction Log Page \d+ of \d+$/.test(text)
+      || text === "Referenc"
+      || text === "e"
+      || text.startsWith("Code RM Trans ID Conf # Guest Name Posted")
+    ) {
+      prefixLine = null;
+      continue;
+    }
+
+    if (/^Total\b/.test(text)) {
+      prefixLine = null;
+      continue;
+    }
+
+    if (isDailyTransactionLogDetailLine(line)) {
+      rows.push({
+        transaction_code: normalizeText(sliceText(line, 18, 40)),
+        transaction_description: joinTextParts([
+          sliceOptionalText(prefixLine, 46, 132),
+          sliceText(line, 46, 132)
+        ]),
+        room_number: normalizeText(sliceText(line, 132, 166)),
+        transaction_id: normalizeText(sliceText(line, 166, 208)),
+        confirmation_no: joinCompactText([
+          sliceOptionalText(prefixLine, 216, 262),
+          sliceText(line, 216, 262)
+        ]),
+        guest_name: joinTextParts([
+          sliceOptionalText(prefixLine, 266, 360),
+          sliceText(line, 266, 360)
+        ]),
+        reference_value: joinTextParts([
+          sliceOptionalText(prefixLine, 360, 466),
+          sliceText(line, 360, 466)
+        ]),
+        posted_amount: normalizeFlexibleNumeric(sliceText(line, 464, 500)),
+        adjusted_amount: normalizeFlexibleNumeric(sliceText(line, 498, 545)),
+        original_id: normalizeText(sliceText(line, 548, 586)),
+        original_date: parseMonthDayWithReferenceYear(sliceText(line, 588, 620), referenceDate) ?? normalizeText(sliceText(line, 588, 620)),
+        void_from_value: normalizeText(sliceText(line, 626, 686)),
+        clerk_name: normalizeText(sliceText(line, 690, 728)),
+        transaction_time: normalizeText(sliceText(line, 730, 770))
+      });
+      prefixLine = null;
+      continue;
+    }
+
+    prefixLine = line;
+  }
+
+  return rows;
+}
+
+function parseCreditCardTransactions(document: PdfDocumentText): Array<Record<string, string | null>> {
+  const rows: Array<Record<string, string | null>> = [];
+  let prefixLine: PdfLine | null = null;
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (
+      !text
+      || shouldSkipCommonLine(text)
+      || text === "Credit Card Transactions"
+      || text.startsWith("* = Not Swiped")
+      || text.startsWith("Type CC # Status Code RM Conf # Guest Name")
+      || text.startsWith("Batch ID Sales Sales Total Credits Credits Total")
+    ) {
+      prefixLine = null;
+      continue;
+    }
+
+    if (/^Total\b/.test(text) || /^Totals\b/.test(text)) {
+      prefixLine = null;
+      continue;
+    }
+
+    if (isCreditCardDetailLine(line)) {
+      rows.push({
+        card_type: normalizeText(sliceText(line, 14, 34)),
+        card_number_fragment: normalizeText(sliceText(line, 42, 78)),
+        transaction_status: normalizeText(sliceText(line, 78, 128)),
+        payment_code: normalizeText(sliceText(line, 132, 166)),
+        room_number: normalizeText(sliceText(line, 166, 208)),
+        confirmation_no: joinCompactText([
+          sliceOptionalText(prefixLine, 210, 248),
+          sliceText(line, 210, 248)
+        ]),
+        guest_name: joinTextParts([
+          sliceOptionalText(prefixLine, 250, 328),
+          sliceText(line, 250, 328)
+        ]),
+        authorization_no: normalizeText(sliceText(line, 328, 362)),
+        batch_id: normalizeText(sliceText(line, 364, 402)),
+        charge_amount: normalizeFlexibleNumeric(sliceText(line, 456, 498)),
+        credit_amount: normalizeFlexibleNumeric(sliceText(line, 522, 552)),
+        transaction_id: normalizeText(sliceText(line, 556, 594)),
+        void_from_value: normalizeFlexibleNumeric(sliceText(line, 604, 640)) ?? normalizeText(sliceText(line, 604, 640)),
+        clerk_name: normalizeText(sliceText(line, 674, 704)),
+        transaction_time: normalizeText(sliceText(line, 710, 754))
+      });
+      prefixLine = null;
+      continue;
+    }
+
+    prefixLine = line;
+  }
+
+  return rows;
+}
+
+function parseOperatorTransactions(
+  document: PdfDocumentText,
+  referenceDate: string | null
+): Array<Record<string, string | null>> {
+  const rows: Array<Record<string, string | null>> = [];
+  let prefixLine: PdfLine | null = null;
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (
+      !text
+      || shouldSkipCommonLine(text)
+      || /^Operator Transactions Page \d+ of \d+$/.test(text)
+      || text === "Operator Totals"
+      || text.startsWith("Code RM Trans ID Conf # Guest Name Reference")
+      || text.startsWith("Category Code Description AMT Adj Total")
+    ) {
+      prefixLine = null;
+      continue;
+    }
+
+    if (/^Total\b/.test(text) || /^Totals\b/.test(text)) {
+      prefixLine = null;
+      continue;
+    }
+
+    if (isOperatorTransactionDetailLine(line)) {
+      rows.push({
+        transaction_code: normalizeText(sliceText(line, 16, 34)),
+        transaction_description: joinTextParts([
+          sliceOptionalText(prefixLine, 36, 140),
+          sliceText(line, 36, 140)
+        ]),
+        transaction_id: normalizeText(sliceText(line, 140, 184)),
+        confirmation_no: joinCompactText([
+          sliceOptionalText(prefixLine, 188, 232),
+          sliceText(line, 188, 232)
+        ]),
+        guest_name: joinTextParts([
+          sliceOptionalText(prefixLine, 232, 308),
+          sliceText(line, 232, 308)
+        ]),
+        reference_value: joinTextParts([
+          sliceOptionalText(prefixLine, 308, 412),
+          sliceText(line, 308, 412)
+        ]),
+        amount: normalizeFlexibleNumeric(sliceText(line, 412, 452)),
+        adjustment_amount: normalizeFlexibleNumeric(sliceText(line, 496, 528)),
+        original_id: normalizeText(sliceText(line, 528, 586)),
+        original_date: parseMonthDayWithReferenceYear(sliceText(line, 588, 628), referenceDate) ?? normalizeText(sliceText(line, 588, 628)),
+        void_from_value: normalizeText(sliceText(line, 628, 666)),
+        clerk_name: normalizeText(sliceText(line, 666, 714)),
+        transaction_time: normalizeText(sliceText(line, 714, 760))
+      });
+      prefixLine = null;
+      continue;
+    }
+
+    prefixLine = line;
+  }
+
+  return rows;
+}
+
+function parseAdjustmentRefundActivity(document: PdfDocumentText): Array<Record<string, string | null>> {
+  const detailLines: PdfLine[] = [];
+  const summaryLines: PdfLine[] = [];
+  let section: "Adjustments" | "Adjustment Summary" | null = null;
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (!text || shouldSkipCommonLine(text) || shouldSkipVisibleTitleLine(text)) {
+      continue;
+    }
+    if (text === "Adjustments" || text === "Adjustment Summary") {
+      section = text;
+      continue;
+    }
+    if (section === "Adjustments") {
+      detailLines.push(line);
+      continue;
+    }
+    if (section === "Adjustment Summary") {
+      summaryLines.push(line);
+    }
+  }
+
+  const detailBlocks = collectLineBlocks(
+    detailLines.filter((line) => (
+      !line.text.startsWith("Date Time Transaction")
+      && !line.text.startsWith("Type Name User")
+      && line.text !== "Code"
+      && !/^Totals\b/.test(line.text)
+    )),
+    (line) => isNamedDateTimeLine(line.text)
+  );
+
+  const rows = detailBlocks.map((block) => ({
+    section: "Adjustments",
+    row_kind: "detail",
+    transaction_date: parseShortDate(firstNonEmptySlice(block, 24, 72)),
+    transaction_time: normalizeText(firstNonEmptySlice(block, 84, 128)),
+    transaction_scope: joinSlices(block, 140, 196),
+    charge_type: joinSlices(block, 198, 248),
+    subject_name: joinSlices(block, 250, 320),
+    transaction_number: firstNonEmptySlice(block, 314, 356),
+    room_number: firstNonEmptySlice(block, 382, 404),
+    reason_code: joinSlices(block, 424, 474),
+    adjusted_amount: normalizeCurrencyAmount(firstNonEmptySlice(block, 488, 526)),
+    adjusted_tax: normalizeCurrencyAmount(firstNonEmptySlice(block, 544, 582)),
+    transferred_charge: normalizeCurrencyAmount(firstNonEmptySlice(block, 600, 642)),
+    transferred_tax: normalizeCurrencyAmount(firstNonEmptySlice(block, 660, 698)),
+    username: joinSlices(block, 708, 764),
+    remarks: joinSlices(block, 770, 822),
+    note: joinTextParts(block.slice(1).map((line) => line.text))
+  }));
+
+  for (const line of detailLines) {
+    if (!/^Totals\b/.test(line.text)) {
+      continue;
+    }
+    rows.push({
+      section: "Adjustments",
+      row_kind: "total",
+      transaction_date: null,
+      transaction_time: null,
+      transaction_scope: "Totals",
+      charge_type: null,
+      subject_name: null,
+      transaction_number: null,
+      room_number: null,
+      reason_code: null,
+      adjusted_amount: normalizeCurrencyAmount(sliceText(line, 488, 526)),
+      adjusted_tax: normalizeCurrencyAmount(sliceText(line, 544, 582)),
+      transferred_charge: normalizeCurrencyAmount(sliceText(line, 600, 642)),
+      transferred_tax: normalizeCurrencyAmount(sliceText(line, 660, 698)),
+      username: null,
+      remarks: null,
+      note: null
+    });
+  }
+
+  const summaryBlocks = collectLineBlocks(
+    summaryLines.filter((line) => !line.text.startsWith("Type Name User")),
+    (line) => /^(Charge Type And User|Reason Code)\b/.test(line.text)
+  );
+
+  rows.push(...summaryBlocks.map((block) => {
+    const firstLine = block[0];
+    const scope = /^Charge Type And User/.test(firstLine.text) ? "Charge Type And User" : "Reason Code";
+    return {
+      section: "Adjustment Summary",
+      row_kind: "summary",
+      transaction_date: null,
+      transaction_time: null,
+      transaction_scope: scope,
+      charge_type: joinSlices(block, 152, 240),
+      subject_name: null,
+      transaction_number: null,
+      room_number: null,
+      reason_code: scope === "Reason Code" ? joinSlices(block, 152, 240) : null,
+      adjusted_amount: normalizeCurrencyAmount(firstNonEmptySlice(block, 398, 442)),
+      adjusted_tax: normalizeCurrencyAmount(firstNonEmptySlice(block, 516, 554)),
+      transferred_charge: normalizeCurrencyAmount(firstNonEmptySlice(block, 630, 668)),
+      transferred_tax: normalizeCurrencyAmount(firstNonEmptySlice(block, 744, 782)),
+      username: joinSlices(block, 272, 340),
+      remarks: null,
+      note: joinTextParts(block.slice(1).map((line) => line.text))
+    };
+  }));
+
+  return rows;
+}
+
+function parseAllTransactions(document: PdfDocumentText): Array<Record<string, string | null>> {
+  let section: string | null = null;
+  const dataLines: PdfLine[] = [];
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (!text || shouldSkipCommonLine(text) || shouldSkipVisibleTitleLine(text)) {
+      continue;
+    }
+    if (text === "Reservations") {
+      section = text;
+      continue;
+    }
+    if (
+      text.startsWith("Date Time Confirmatio")
+      || text.startsWith("n Number Name Number Number Code")
+      || text.startsWith("Description Category Type")
+      || text.startsWith("Date Time Confirmatio Guest Room Group")
+      || text.startsWith("n Number Name Number Code Number")
+      || text.startsWith("Code Name Description")
+    ) {
+      continue;
+    }
+
+    dataLines.push(line);
+  }
+
+  const blocks = collectLineBlocks(dataLines, (line) => isNamedDateTimeLine(line.text));
+  return blocks.map((block) => ({
+    section,
+    transaction_date: parseShortDate(firstNonEmptySlice(block, 24, 72)),
+    transaction_time: normalizeText(firstNonEmptySlice(block, 84, 128)),
+    confirmation_no: firstNonEmptySlice(block, 130, 176),
+    guest_name: joinSlices(block, 180, 248),
+    room_number: firstNonEmptySlice(block, 248, 272),
+    folio_number: firstNonEmptySlice(block, 296, 332),
+    transaction_code: firstNonEmptySlice(block, 348, 380),
+    transaction_description: normalizeText(sliceText(block[0], 398, 462)),
+    last_four_digits: firstNonEmptySlice(block, 462, 488),
+    transaction_type: normalizeText(sliceText(block[0], 498, 550)),
+    charge_type: normalizeText(sliceText(block[0], 560, 620)),
+    amount: normalizeCurrencyAmount(firstNonEmptySlice(block, 718, 766)),
+    username: normalizeText(firstNonEmptySlice(block, 780, 816)),
+    note: joinTextParts(block.slice(1).map((line) => joinTextParts([
+      sliceText(line, 390, 620),
+      sliceText(line, 720, 816)
+    ])))
+  }));
+}
+
+function parseClosedFolioBalances(document: PdfDocumentText): Array<Record<string, string | null>> {
+  return parseHolidayFolioBalanceReport(document, "closed");
+}
+
+function parseInHouseGuestFolioBalances(document: PdfDocumentText): Array<Record<string, string | null>> {
+  return parseHolidayFolioBalanceReport(document, "in-house");
+}
+
+function parseHolidayFolioBalanceReport(
+  document: PdfDocumentText,
+  mode: "closed" | "in-house"
+): Array<Record<string, string | null>> {
+  const rows: Array<Record<string, string | null>> = [];
+  let section: "Reservations" | "Net Totals" | "Balances" | null = null;
+  let detailBlock: PdfLine[] = [];
+  let totalBlock: PdfLine[] = [];
+
+  const flushDetail = (): void => {
+    if (detailBlock.length === 0) {
+      return;
+    }
+
+    if (mode === "in-house") {
+      rows.push({
+        section,
+        row_kind: "detail",
+        summary_label: null,
+        confirmation_no: firstNonEmptySlice(detailBlock, 24, 92),
+        group_code: firstNonEmptySlice(detailBlock, 96, 138),
+        room_number: firstNonEmptySlice(detailBlock, 140, 166),
+        guest_name: joinSlices(detailBlock, 182, 248),
+        additional_guests: joinSlices(detailBlock, 248, 286),
+        company_name: joinSlices(detailBlock, 288, 360),
+        check_in_date: parseShortDate(firstNonEmptySlice(detailBlock, 346, 390)),
+        check_out_date: parseShortDate(firstNonEmptySlice(detailBlock, 400, 442)),
+        rate_plan: firstNonEmptySlice(detailBlock, 456, 490),
+        payment_method: joinSlices(detailBlock, 506, 560),
+        reservation_status: joinSlices(detailBlock, 560, 620),
+        todays_charges: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 612, 658)),
+        todays_payments: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 668, 710)),
+        opening_balance: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 718, 766)),
+        net_change: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 772, 820)),
+        ending_balance: null,
+        metric_value: null,
+        note: null
+      });
+    } else {
+      rows.push({
+        section,
+        row_kind: "detail",
+        summary_label: null,
+        confirmation_no: firstNonEmptySlice(detailBlock, 34, 86),
+        group_code: null,
+        room_number: null,
+        guest_name: joinSlices(detailBlock, 100, 184),
+        additional_guests: null,
+        company_name: joinSlices(detailBlock, 184, 250),
+        check_in_date: parseShortDate(firstNonEmptySlice(detailBlock, 252, 300)),
+        check_out_date: parseShortDate(firstNonEmptySlice(detailBlock, 324, 372)),
+        rate_plan: null,
+        payment_method: null,
+        reservation_status: joinSlices(detailBlock, 388, 454),
+        todays_charges: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 476, 516)),
+        todays_payments: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 548, 586)),
+        opening_balance: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 612, 666)),
+        net_change: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 692, 730)),
+        ending_balance: normalizeCurrencyAmount(joinCompactSlices(detailBlock, 758, 812)),
+        metric_value: null,
+        note: null
+      });
+    }
+
+    detailBlock = [];
+  };
+
+  const flushReservationTotal = (): void => {
+    if (totalBlock.length === 0) {
+      return;
+    }
+
+    if (mode === "in-house") {
+      rows.push({
+        section: "Reservations",
+        row_kind: "total",
+        summary_label: "Totals",
+        confirmation_no: null,
+        group_code: null,
+        room_number: null,
+        guest_name: null,
+        additional_guests: null,
+        company_name: null,
+        check_in_date: null,
+        check_out_date: null,
+        rate_plan: null,
+        payment_method: null,
+        reservation_status: null,
+        todays_charges: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 612, 658)),
+        todays_payments: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 668, 710)),
+        opening_balance: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 718, 766)),
+        net_change: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 772, 820)),
+        ending_balance: null,
+        metric_value: null,
+        note: null
+      });
+    } else {
+      rows.push({
+        section: "Reservations",
+        row_kind: "total",
+        summary_label: "Totals",
+        confirmation_no: null,
+        group_code: null,
+        room_number: null,
+        guest_name: null,
+        additional_guests: null,
+        company_name: null,
+        check_in_date: null,
+        check_out_date: null,
+        rate_plan: null,
+        payment_method: null,
+        reservation_status: null,
+        todays_charges: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 476, 516)),
+        todays_payments: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 548, 586)),
+        opening_balance: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 612, 666)),
+        net_change: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 692, 730)),
+        ending_balance: normalizeCurrencyAmount(joinCompactSlices(totalBlock, 758, 812)),
+        metric_value: null,
+        note: null
+      });
+    }
+
+    totalBlock = [];
+  };
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (!text || shouldSkipCommonLine(text)) {
+      continue;
+    }
+    if (text === "Reservations" || text === "Net Totals" || text === "Balances") {
+      flushDetail();
+      flushReservationTotal();
+      section = text;
+      continue;
+    }
+
+    if (
+      text.startsWith("Confirmatio Group Room Guest")
+      || text.startsWith("n Number Code Number Name")
+      || text === "Balance"
+      || text.startsWith("Confirmation Guest Name Company Name")
+      || text.startsWith("Number Payments Opening Change")
+      || text.startsWith("Today's Charges Today's Payments Today's Opening Balance")
+    ) {
+      continue;
+    }
+
+    if (section === "Reservations") {
+      if (/^\d{8}\b/.test(text)) {
+        flushDetail();
+        flushReservationTotal();
+        detailBlock = [line];
+        continue;
+      }
+      if (/^Totals\b/.test(text)) {
+        flushDetail();
+        flushReservationTotal();
+        totalBlock = [line];
+        continue;
+      }
+      if (detailBlock.length > 0) {
+        detailBlock.push(line);
+        continue;
+      }
+      if (totalBlock.length > 0) {
+        totalBlock.push(line);
+        continue;
+      }
+    }
+
+    if (section === "Net Totals") {
+      const values = extractCurrencyTokens(text);
+      if (values.length >= 4) {
+        rows.push({
+          section,
+          row_kind: /^Totals\b/.test(text) ? "total" : "summary",
+          summary_label: normalizeText(text.slice(0, values[0]?.index ?? 0)),
+          confirmation_no: null,
+          group_code: null,
+          room_number: null,
+          guest_name: null,
+          additional_guests: null,
+          company_name: null,
+          check_in_date: null,
+          check_out_date: null,
+          rate_plan: null,
+          payment_method: null,
+          reservation_status: null,
+          todays_charges: values[0]?.value ?? null,
+          todays_payments: values[1]?.value ?? null,
+          opening_balance: values[2]?.value ?? null,
+          net_change: values[3]?.value ?? null,
+          ending_balance: values[4]?.value ?? null,
+          metric_value: null,
+          note: null
+        });
+      }
+      continue;
+    }
+
+    if (section === "Balances") {
+      const values = extractCurrencyTokens(text);
+      if (values.length > 0) {
+        rows.push({
+          section,
+          row_kind: "metric",
+          summary_label: normalizeText(text.slice(0, values[0]?.index ?? 0)),
+          confirmation_no: null,
+          group_code: null,
+          room_number: null,
+          guest_name: null,
+          additional_guests: null,
+          company_name: null,
+          check_in_date: null,
+          check_out_date: null,
+          rate_plan: null,
+          payment_method: null,
+          reservation_status: null,
+          todays_charges: null,
+          todays_payments: null,
+          opening_balance: null,
+          net_change: null,
+          ending_balance: null,
+          metric_value: values[0]?.value ?? null,
+          note: null
+        });
+      }
+    }
+  }
+
+  flushDetail();
+  flushReservationTotal();
+  return rows;
+}
+
+function parseRateReport(document: PdfDocumentText): Array<Record<string, string | null>> {
+  const lines = document.lines.filter((line) => {
+    const text = line.text;
+    return Boolean(text)
+      && !shouldSkipCommonLine(text)
+      && text !== "Rate Report"
+      && !text.startsWith("Room Room Guest Adults Children")
+      && text !== "Balance";
+  });
+
+  const blocks = collectLineBlocks(lines, (line) => /^\d+\s+[A-Z0-9]{3,4}\b/.test(line.text));
+  return blocks.map((block) => ({
+    room_number: firstNonEmptySlice(block, 30, 58),
+    room_type: firstNonEmptySlice(block, 70, 106),
+    guest_name: joinSlices(block, 114, 170),
+    adults: firstNonEmptySlice(block, 176, 192),
+    children: firstNonEmptySlice(block, 220, 238),
+    reservation_status: joinSlices(block, 258, 318),
+    nights: firstNonEmptySlice(block, 314, 334),
+    check_in_date: parseShortDate(firstNonEmptySlice(block, 344, 390)),
+    check_out_date: parseShortDate(firstNonEmptySlice(block, 392, 438)),
+    room_rate: normalizeCurrencyAmount(joinCompactSlices(block, 440, 478)),
+    room_fees: normalizeCurrencyAmount(joinCompactSlices(block, 486, 524)),
+    total_guest_balance: normalizeCurrencyAmount(joinCompactSlices(block, 532, 572)),
+    note: null
+  }));
+}
+
+function parseReservationListing(document: PdfDocumentText): Array<Record<string, string | null>> {
+  const rows: Array<Record<string, string | null>> = [];
+  let section: string | null = null;
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (!text || shouldSkipCommonLine(text) || shouldSkipVisibleTitleLine(text)) {
+      continue;
+    }
+    if (text === "Reservations" || text === "In House" || text === "No Show" || text === "Cancelled") {
+      section = text;
+      continue;
+    }
+    if (
+      text.startsWith("Market Local Market Confirmation")
+      || text.startsWith("Segment Segment Number")
+      || text.startsWith("Code Code Number")
+    ) {
+      continue;
+    }
+    if (/^Totals\b/.test(text)) {
+      rows.push({
+        section,
+        row_kind: "total",
+        summary_label: "Totals",
+        market_segment_code: null,
+        local_segment_code: null,
+        confirmation_no: null,
+        group_number: null,
+        group_code: null,
+        external_confirmation_no: null,
+        external_cancellation_no: null,
+        po_number: null,
+        ota_booking_number: null,
+        package_number: null,
+        note: null
+      });
+      continue;
+    }
+
+    const tokens = text.split(/\s+/);
+    if (tokens.length < 3) {
+      continue;
+    }
+
+    const hasLocalSegment = tokens[1] != null && /^[A-Z]$/.test(tokens[1]) && tokens.length >= 4;
+    const marketSegmentCode = tokens[0] ?? null;
+    const localSegmentCode = hasLocalSegment ? tokens[1] ?? null : null;
+    const baseIndex = hasLocalSegment ? 2 : 1;
+    const extras = tokens.slice(baseIndex + 2);
+
+    rows.push({
+      section,
+      row_kind: "detail",
+      summary_label: null,
+      market_segment_code: marketSegmentCode,
+      local_segment_code: localSegmentCode,
+      confirmation_no: tokens[baseIndex] ?? null,
+      group_number: tokens[baseIndex + 1] ?? null,
+      group_code: extras[0] ?? null,
+      external_confirmation_no: extras[1] ?? null,
+      external_cancellation_no: section === "Cancelled" ? (extras[2] ?? null) : null,
+      po_number: section === "Cancelled" ? (extras[3] ?? null) : (extras[2] ?? null),
+      ota_booking_number: section === "Cancelled" ? (extras[4] ?? null) : (extras[3] ?? null),
+      package_number: section === "Cancelled" ? (extras[5] ?? null) : (extras[4] ?? null),
+      note: null
+    });
+  }
+
+  return rows;
+}
+
+function parseTrialBalanceReport(document: PdfDocumentText): Array<Record<string, string | null>> {
+  const lines = document.lines.filter((line) => {
+    const text = line.text;
+    return Boolean(text)
+      && !shouldSkipCommonLine(text)
+      && text !== "Trial Balance Report"
+      && !text.startsWith("Type Account Name")
+      && text !== "Code Balance Balance";
+  });
+
+  const blocks = collectLineBlocks(lines, (line) => (
+    /^(?:ASSET|LIABILITY|EQUITY|REVENUE|EXPENSE)\b/.test(line.text)
+    || /^(?:Total|Grand Total)\b/.test(line.text)
+  ));
+
+  return blocks.map((block) => ({
+    row_kind: /^(?:Total|Grand Total)\b/.test(block[0]?.text ?? "") ? "total" : "detail",
+    account_type: firstNonEmptySlice(block, 34, 80),
+    account_name: joinSlices(block, 80, 176),
+    transaction_code: firstNonEmptySlice(block, 176, 214),
+    opening_balance: normalizeCurrencyAmount(joinCompactSlices(block, 232, 298)),
+    debit_amount: normalizeCurrencyAmount(joinCompactSlices(block, 314, 352)),
+    credit_amount: normalizeCurrencyAmount(joinCompactSlices(block, 374, 430)),
+    net_change: normalizeCurrencyAmount(joinCompactSlices(block, 444, 502)),
+    closing_balance: normalizeCurrencyAmount(joinCompactSlices(block, 510, 574)),
+    note: null
+  }));
 }
 
 function parseAdvanceDepositActivity(document: PdfDocumentText): Array<Record<string, string | null>> {
@@ -2340,12 +3457,57 @@ function joinSlices(lines: PdfLine[], minX: number, maxX: number): string | null
   return normalizeText(parts.join(" "));
 }
 
+function joinCompactSlices(lines: PdfLine[], minX: number, maxX: number): string | null {
+  return joinCompactText(lines.map((line) => sliceText(line, minX, maxX)));
+}
+
+function isNamedDateTimeLine(text: string): boolean {
+  return /^\d{2}-[A-Za-z]{3}-\d{2}\s+\d{2}:\d{2}:\d{2}\b/.test(text);
+}
+
 function normalizeText(value: string | null | undefined): string | null {
   if (!value) {
     return null;
   }
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized || null;
+}
+
+function normalizeCurrencyAmount(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  let cleaned = value.trim().replace(/\s+/g, "");
+  if (!cleaned) {
+    return null;
+  }
+
+  let negative = false;
+  if (cleaned.startsWith("(") && cleaned.endsWith(")")) {
+    negative = true;
+    cleaned = cleaned.slice(1, -1);
+  }
+  if (cleaned.startsWith("-")) {
+    negative = true;
+    cleaned = cleaned.slice(1);
+  }
+  if (cleaned.endsWith("-")) {
+    negative = true;
+    cleaned = cleaned.slice(0, -1);
+  }
+
+  cleaned = cleaned
+    .replace(/USD/gi, "")
+    .replace(/\$/g, "")
+    .replace(/,/g, "")
+    .replace(/%/g, "");
+
+  if (!cleaned) {
+    return null;
+  }
+
+  return /^\d+(?:\.\d+)?$/.test(cleaned) ? `${negative ? "-" : ""}${cleaned}` : value.trim();
 }
 
 function normalizeAmount(value: string | null | undefined): string | null {
@@ -2355,6 +3517,7 @@ function normalizeAmount(value: string | null | undefined): string | null {
 
   const cleaned = value
     .replace(/,/g, "")
+    .replace(/USD/gi, "")
     .replace(/\$/g, "")
     .replace(/\s+/g, "")
     .replace(/%/g, "");
@@ -2384,8 +3547,16 @@ function normalizeFlexibleNumeric(value: string | null | undefined): string | nu
     cleaned = `-${cleaned.slice(0, -1)}`;
   }
 
-  cleaned = cleaned.replace(/\$/g, "").replace(/,/g, "").replace(/%/g, "");
+  cleaned = cleaned.replace(/USD/gi, "").replace(/\$/g, "").replace(/,/g, "").replace(/%/g, "");
   return /^-?\d+(?:\.\d+)?$/.test(cleaned) ? cleaned : value.trim();
+}
+
+function extractCurrencyTokens(text: string): Array<{ index: number; value: string }> {
+  const matches = Array.from(text.matchAll(/\(?-?(?:USD|\$)?\d[\d,]*(?:\.\d+)?\)?-?/gi));
+  return matches.map((match) => ({
+    index: match.index ?? 0,
+    value: normalizeCurrencyAmount(match[0]) ?? match[0]
+  }));
 }
 
 function extractBestWesternMetricLine(text: string, maxValues: number): { label: string | null; values: string[] } | null {
@@ -2484,12 +3655,35 @@ function isHotelStatisticsHeader(text: string): boolean {
     || text.startsWith("Description Actual Today");
 }
 
+function isDailyTransactionLogDetailLine(line: PdfLine): boolean {
+  const code = normalizeText(sliceText(line, 18, 40));
+  const transactionId = normalizeText(sliceText(line, 166, 208));
+  return Boolean(code && /^[A-Z0-9]{2}$/.test(code) && transactionId && /^\d+$/.test(transactionId));
+}
+
+function isCreditCardDetailLine(line: PdfLine): boolean {
+  const cardType = normalizeText(sliceText(line, 14, 34));
+  const cardNumberFragment = normalizeText(sliceText(line, 42, 78));
+  const transactionId = normalizeText(sliceText(line, 556, 594));
+  return Boolean(cardType && /^[A-Z]{2}$/.test(cardType) && cardNumberFragment && transactionId && /^\d+$/.test(transactionId));
+}
+
+function isOperatorTransactionDetailLine(line: PdfLine): boolean {
+  const code = normalizeText(sliceText(line, 16, 34));
+  const transactionId = normalizeText(sliceText(line, 140, 184));
+  return Boolean(code && /^[A-Z0-9]{2}$/.test(code) && transactionId && /^\d+$/.test(transactionId));
+}
+
 function sliceText(line: PdfLine, minX: number, maxX: number): string {
   const items = line.items.filter((item) => {
     const center = item.x + item.width / 2;
     return center >= minX && center < maxX;
   });
   return items.map((item) => item.text).join(" ").replace(/\s+/g, " ").trim();
+}
+
+function sliceOptionalText(line: PdfLine | null, minX: number, maxX: number): string {
+  return line ? sliceText(line, minX, maxX) : "";
 }
 
 function normalizeNumeric(value: string): string | null {
@@ -2543,6 +3737,8 @@ function shouldSkipCommonLine(text: string): boolean {
     || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(text)
     || /^\d{2}:\d{2}$/.test(text)
     || /^Page \d+ of \d+/.test(text)
+    || /^Page\d+\s*\/\s*\d+$/i.test(text)
+    || /^Page\s+\d+\s*\/\s*\d+$/i.test(text)
     || /^Filter\b/.test(text)
     || /^Sort Order\b/.test(text)
     || /^Resv\. Status\b/.test(text)
@@ -2554,7 +3750,16 @@ function shouldSkipCommonLine(text: string): boolean {
     || text === "Zero Rate Rooms"
     || text === "AR Detailed Aging"
     || text === "Rate Change Report"
+    || text === "A/R Aging"
+    || text === "All Transactions"
+    || text === "Adjustments and Refunds Activity"
+    || text === "Closed Folio Balances"
     || text === "Daily Report"
+    || text === "Daily Audit Packet"
+    || text === "Room & Tax Listing"
+    || text === "Daily Transaction Log"
+    || text === "Credit Card Transactions"
+    || text === "Operator Transactions"
     || text === "Advance Deposit Activity"
     || text === "Booked Reservations"
     || text === "Direct Bill Aging"
@@ -2562,7 +3767,10 @@ function shouldSkipCommonLine(text: string): boolean {
     || text === "Final Audit"
     || text === "High Balance Report"
     || text === "Hotel Statistics"
+    || text === "In House Guest Folio Balances"
     || text === "Maintenance Summary"
+    || text === "Rate Report"
+    || text === "Trial Balance Report"
     || text === "Authorized Payments Report"
     || text === "Breakfast And Packages"
     || text === "Departures List"
@@ -2580,13 +3788,24 @@ function isNonPropertyHeader(text: string): boolean {
     || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(text)
     || /^\d{2}:\d{2}$/.test(text)
     || /^Page \d+ of \d+/.test(text)
+    || /^Page\d+\s*\/\s*\d+$/i.test(text)
+    || /^Page\s+\d+\s*\/\s*\d+$/i.test(text)
     || text === "History and Forecast"
     || text === "Manager - Flash Last Day"
     || text === "Reservations - made Yesterday"
     || text === "Zero Rate Rooms"
     || text === "AR Detailed Aging"
     || text === "Rate Change Report"
+    || text === "A/R Aging"
+    || text === "All Transactions"
+    || text === "Adjustments and Refunds Activity"
+    || text === "Closed Folio Balances"
     || text === "Daily Report"
+    || text === "Daily Audit Packet"
+    || text === "Room & Tax Listing"
+    || text === "Daily Transaction Log"
+    || text === "Credit Card Transactions"
+    || text === "Operator Transactions"
     || text === "Advance Deposit Activity"
     || text === "Booked Reservations"
     || text === "Direct Bill Aging"
@@ -2594,7 +3813,10 @@ function isNonPropertyHeader(text: string): boolean {
     || text === "Final Audit"
     || text === "High Balance Report"
     || text === "Hotel Statistics"
+    || text === "In House Guest Folio Balances"
     || text === "Maintenance Summary"
+    || text === "Rate Report"
+    || text === "Trial Balance Report"
     || text === "Authorized Payments Report"
     || text === "Breakfast And Packages"
     || text === "Departures List"
@@ -2611,6 +3833,7 @@ function shouldSkipVisibleTitleLine(text: string): boolean {
   return /^User:/i.test(text)
     || /^Report run date:/i.test(text)
     || /^Report run time:/i.test(text)
+    || /^\?{3}\s+Date(?: Range)?:/i.test(text)
     || /^[A-Z0-9]{2,}\s+Report run date:/i.test(text)
     || /^[A-Z0-9]{2,}\s+Report run time:/i.test(text)
     || /^Page \d+ of \d+/.test(text)
@@ -2628,4 +3851,28 @@ function joinNote(existing: string | null | undefined, addition: string): string
     return trimmed;
   }
   return `${existing} | ${trimmed}`;
+}
+
+function joinTextParts(parts: Array<string | null | undefined>): string | null {
+  const normalized = parts
+    .map((part) => normalizeText(part))
+    .filter((part): part is string => Boolean(part));
+
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalizeText(normalized.join(" "));
+}
+
+function joinCompactText(parts: Array<string | null | undefined>): string | null {
+  const normalized = parts
+    .map((part) => normalizeText(part))
+    .filter((part): part is string => Boolean(part));
+
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalized.join("");
 }

@@ -1,6 +1,9 @@
 const state = {
   dashboard: null,
   latestRun: null,
+  currentUser: null,
+  currentPage: "overview",
+  users: [],
   selectedProperty: null,
   selectedHistoryYear: null,
   selectedHistoryMonth: null,
@@ -10,12 +13,42 @@ const state = {
   propertySaving: false,
   propertyFormStatus: "No pending edits.",
   propertyFormTone: "empty",
+  viewerSaving: false,
+  viewerDeletingUserId: null,
+  userPasswordSavingId: null,
+  viewerFormStatus: "No account changes yet.",
+  viewerFormTone: "empty",
+  approvedSenderPatterns: [],
+  approvedSenderSource: "default",
+  approvedSenderSaving: false,
+  approvedSenderStatus: "No sender allowlist changes yet.",
+  approvedSenderTone: "empty",
+  netsuiteSettings: null,
+  netsuiteSaving: false,
+  netsuiteTesting: false,
+  netsuiteCatalogExporting: false,
+  netsuiteStatus: "No NetSuite connector changes yet.",
+  netsuiteTone: "empty",
+  netsuitePostingProperties: [],
+  netsuitePostingWorkspace: null,
+  netsuitePostingStatus: "No NetSuite posting actions yet.",
+  netsuitePostingTone: "empty",
+  netsuitePostingLoading: false,
+  netsuitePostingSaving: false,
+  netsuitePostingPreviewing: false,
+  netsuitePostingSubmitting: false,
+  netsuitePostingSelectedRunId: "",
   loading: false
 };
 
 const heroStatus = document.getElementById("hero-status");
+const heroAccount = document.getElementById("hero-account");
 const refreshButton = document.getElementById("refresh-button");
+const reparseButton = document.getElementById("reparse-button");
 const runButton = document.getElementById("run-button");
+const logoutButton = document.getElementById("logout-button");
+const pageLinks = Array.from(document.querySelectorAll("[data-page-link]"));
+const pageViews = Array.from(document.querySelectorAll("[data-page]"));
 const overviewStamp = document.getElementById("overview-stamp");
 const overviewGrid = document.getElementById("overview-grid");
 const propertyList = document.getElementById("property-list");
@@ -37,80 +70,384 @@ const propertyHistoryCaption = document.getElementById("property-history-caption
 const propertyHistoryBrowser = document.getElementById("property-history-browser");
 const propertyHistorySelection = document.getElementById("property-history-selection");
 const propertyModalAttachments = document.getElementById("property-modal-attachments");
+const viewerUserForm = document.getElementById("viewer-user-form");
+const viewerUsernameInput = document.getElementById("viewer-username-input");
+const viewerPasswordInput = document.getElementById("viewer-password-input");
+const viewerCreateButton = document.getElementById("viewer-create-button");
+const viewerFormStatus = document.getElementById("viewer-form-status");
+const viewerUserList = document.getElementById("viewer-user-list");
+const approvedSendersForm = document.getElementById("approved-senders-form");
+const approvedSendersInput = document.getElementById("approved-senders-input");
+const approvedSendersSaveButton = document.getElementById("approved-senders-save-button");
+const approvedSendersStatus = document.getElementById("approved-senders-status");
+const netsuiteSettingsForm = document.getElementById("netsuite-settings-form");
+const netsuiteServiceBaseUrlInput = document.getElementById("netsuite-service-base-url-input");
+const netsuiteClientIdInput = document.getElementById("netsuite-client-id-input");
+const netsuiteCertificateIdInput = document.getElementById("netsuite-certificate-id-input");
+const netsuiteJwtAlgorithmInput = document.getElementById("netsuite-jwt-algorithm-input");
+const netsuiteProbeQueryInput = document.getElementById("netsuite-probe-query-input");
+const netsuitePrivateKeyInput = document.getElementById("netsuite-private-key-input");
+const netsuiteSaveButton = document.getElementById("netsuite-save-button");
+const netsuiteTestButton = document.getElementById("netsuite-test-button");
+const netsuiteClearKeyButton = document.getElementById("netsuite-clear-key-button");
+const netsuiteExportCatalogButton = document.getElementById("netsuite-export-catalog-button");
+const netsuiteKeyStatus = document.getElementById("netsuite-key-status");
+const netsuiteSettingsStatus = document.getElementById("netsuite-settings-status");
+const netsuiteLastTest = document.getElementById("netsuite-last-test");
+const netsuiteLastCatalogExport = document.getElementById("netsuite-last-catalog-export");
+const netsuiteCatalogDownloadLink = document.getElementById("netsuite-catalog-download-link");
+const netsuitePropertyStatus = document.getElementById("netsuite-property-status");
+const netsuitePropertyList = document.getElementById("netsuite-property-list");
+const netsuiteWorkspaceEmpty = document.getElementById("netsuite-workspace-empty");
+const netsuiteWorkspace = document.getElementById("netsuite-workspace");
+const netsuiteWorkspaceSummary = document.getElementById("netsuite-workspace-summary");
+const netsuitePostingForm = document.getElementById("netsuite-posting-form");
+const netsuiteAttachmentSelect = document.getElementById("netsuite-attachment-select");
+const netsuitePostingExternalPrefix = document.getElementById("netsuite-posting-external-prefix");
+const netsuitePostingBalancingGl = document.getElementById("netsuite-posting-balancing-gl");
+const netsuitePostingMemoTemplate = document.getElementById("netsuite-posting-memo-template");
+const netsuitePostingSubsidiaryId = document.getElementById("netsuite-posting-subsidiary-id");
+const netsuitePostingCurrencyId = document.getElementById("netsuite-posting-currency-id");
+const netsuitePostingLocationId = document.getElementById("netsuite-posting-location-id");
+const netsuitePostingDepartmentId = document.getElementById("netsuite-posting-department-id");
+const netsuitePostingClassId = document.getElementById("netsuite-posting-class-id");
+const netsuitePostingRefreshButton = document.getElementById("netsuite-posting-refresh-button");
+const netsuitePostingSaveButton = document.getElementById("netsuite-posting-save-button");
+const netsuitePostingPreviewButton = document.getElementById("netsuite-posting-preview-button");
+const netsuitePostingSubmitButton = document.getElementById("netsuite-posting-submit-button");
+const netsuitePostingStatus = document.getElementById("netsuite-posting-status");
+const netsuitePostingMappingSummary = document.getElementById("netsuite-posting-mapping-summary");
+const netsuitePostingMappings = document.getElementById("netsuite-posting-mappings");
+const netsuitePostingPreview = document.getElementById("netsuite-posting-preview");
+const netsuitePostingRuns = document.getElementById("netsuite-posting-runs");
+const PAGE_IDS = ["overview", "properties", "netsuite", "scope", "settings"];
+const propertyEditorAvailable = Boolean(
+  propertyEditForm &&
+  propertyNameInput &&
+  propertySlugInput &&
+  propertySaveButton &&
+  propertyFormStatus
+);
+const viewerSettingsAvailable = Boolean(
+  viewerUserForm &&
+  viewerUsernameInput &&
+  viewerPasswordInput &&
+  viewerCreateButton &&
+  viewerFormStatus &&
+  viewerUserList
+);
+const approvedSenderSettingsAvailable = Boolean(
+  approvedSendersForm &&
+  approvedSendersInput &&
+  approvedSendersSaveButton &&
+  approvedSendersStatus
+);
+const netsuiteSettingsAvailable = Boolean(
+  netsuiteSettingsForm &&
+  netsuiteServiceBaseUrlInput &&
+  netsuiteClientIdInput &&
+  netsuiteCertificateIdInput &&
+  netsuiteJwtAlgorithmInput &&
+  netsuiteProbeQueryInput &&
+  netsuitePrivateKeyInput &&
+  netsuiteSaveButton &&
+  netsuiteTestButton &&
+  netsuiteClearKeyButton &&
+  netsuiteExportCatalogButton &&
+  netsuiteKeyStatus &&
+  netsuiteSettingsStatus &&
+  netsuiteLastTest &&
+  netsuiteLastCatalogExport &&
+  netsuiteCatalogDownloadLink
+);
+const netsuitePostingAvailable = Boolean(
+  netsuitePropertyStatus &&
+  netsuitePropertyList &&
+  netsuiteWorkspaceEmpty &&
+  netsuiteWorkspace &&
+  netsuiteWorkspaceSummary &&
+  netsuitePostingForm &&
+  netsuiteAttachmentSelect &&
+  netsuitePostingExternalPrefix &&
+  netsuitePostingBalancingGl &&
+  netsuitePostingMemoTemplate &&
+  netsuitePostingSubsidiaryId &&
+  netsuitePostingCurrencyId &&
+  netsuitePostingLocationId &&
+  netsuitePostingDepartmentId &&
+  netsuitePostingClassId &&
+  netsuitePostingRefreshButton &&
+  netsuitePostingSaveButton &&
+  netsuitePostingPreviewButton &&
+  netsuitePostingSubmitButton &&
+  netsuitePostingStatus &&
+  netsuitePostingMappingSummary &&
+  netsuitePostingMappings &&
+  netsuitePostingPreview &&
+  netsuitePostingRuns
+);
 
-refreshButton.addEventListener("click", () => {
-  void refreshDashboard("Dashboard refreshed.");
-});
+for (const link of pageLinks) {
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    setCurrentPage(link.getAttribute("data-page-link"), { updateHash: true });
+  });
+}
 
-runButton.addEventListener("click", () => {
-  void triggerRun();
-});
+if (refreshButton) {
+  refreshButton.addEventListener("click", () => {
+    void refreshDashboard("Dashboard refreshed.");
+  });
+}
 
-propertyList.addEventListener("click", (event) => {
-  const target = event.target instanceof Element ? event.target.closest("[data-property-slug]") : null;
-  if (!target) {
-    return;
-  }
+if (logoutButton) {
+  logoutButton.addEventListener("click", () => {
+    void logout();
+  });
+}
 
-  const propertySlug = target.getAttribute("data-property-slug");
-  if (!propertySlug) {
-    return;
-  }
+if (runButton) {
+  runButton.addEventListener("click", () => {
+    void triggerRun();
+  });
+}
 
-  void openPropertyModal(propertySlug);
-});
+if (reparseButton) {
+  reparseButton.addEventListener("click", () => {
+    void triggerReparse();
+  });
+}
 
-propertyModal.addEventListener("click", (event) => {
-  const retryTarget = event.target instanceof Element ? event.target.closest("[data-retry-attachment-id]") : null;
-  if (retryTarget) {
-    const attachmentId = Number(retryTarget.getAttribute("data-retry-attachment-id"));
-    if (Number.isInteger(attachmentId) && attachmentId > 0) {
-      void retryAttachmentParse(attachmentId);
+if (propertyList) {
+  propertyList.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-property-slug]") : null;
+    if (!target) {
+      return;
     }
-    return;
-  }
 
-  const historyTarget = event.target instanceof Element ? event.target.closest("[data-history-level][data-history-key]") : null;
-  if (historyTarget) {
-    updateHistorySelection(
-      historyTarget.getAttribute("data-history-level"),
-      historyTarget.getAttribute("data-history-key")
-    );
-    renderPropertyModal();
-    return;
-  }
+    const propertySlug = target.getAttribute("data-property-slug");
+    if (!propertySlug) {
+      return;
+    }
 
-  const target = event.target instanceof Element ? event.target.closest("[data-close-modal='1']") : null;
-  if (target) {
+    void openPropertyModal(propertySlug);
+  });
+}
+
+if (viewerUserList) {
+  viewerUserList.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-delete-user-id]") : null;
+    if (!target) {
+      return;
+    }
+
+    const userId = Number(target.getAttribute("data-delete-user-id"));
+    if (Number.isInteger(userId) && userId > 0) {
+      void deleteViewerUser(userId);
+    }
+  });
+
+  viewerUserList.addEventListener("submit", (event) => {
+    const form = event.target instanceof HTMLFormElement ? event.target : null;
+    if (!form) {
+      return;
+    }
+
+    const userId = Number(form.getAttribute("data-password-user-id"));
+    const passwordInput = form.querySelector("input[name='password']");
+    const password = passwordInput instanceof HTMLInputElement ? passwordInput.value : "";
+    event.preventDefault();
+
+    if (Number.isInteger(userId) && userId > 0) {
+      void changeUserPassword(userId, password);
+    }
+  });
+}
+
+if (propertyModal) {
+  propertyModal.addEventListener("click", (event) => {
+    const retryTarget = event.target instanceof Element ? event.target.closest("[data-retry-attachment-id]") : null;
+    if (retryTarget) {
+      const attachmentId = Number(retryTarget.getAttribute("data-retry-attachment-id"));
+      if (Number.isInteger(attachmentId) && attachmentId > 0) {
+        void retryAttachmentParse(attachmentId);
+      }
+      return;
+    }
+
+    const historyTarget = event.target instanceof Element ? event.target.closest("[data-history-level][data-history-key]") : null;
+    if (historyTarget) {
+      updateHistorySelection(
+        historyTarget.getAttribute("data-history-level"),
+        historyTarget.getAttribute("data-history-key")
+      );
+      renderPropertyModal();
+      return;
+    }
+
+    const target = event.target instanceof Element ? event.target.closest("[data-close-modal='1']") : null;
+    if (target) {
+      closePropertyModal();
+    }
+  });
+}
+
+if (propertyModalClose) {
+  propertyModalClose.addEventListener("click", () => {
     closePropertyModal();
-  }
-});
+  });
+}
 
-propertyModalClose.addEventListener("click", () => {
-  closePropertyModal();
-});
+if (propertyEditForm) {
+  propertyEditForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void savePropertyEdits();
+  });
+}
 
-propertyEditForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void savePropertyEdits();
-});
+if (viewerUserForm) {
+  viewerUserForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void createViewerUser();
+  });
+}
+
+if (approvedSendersForm) {
+  approvedSendersForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveApprovedSenders();
+  });
+}
+
+if (netsuiteSettingsForm) {
+  netsuiteSettingsForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveNetSuiteSettings(false);
+  });
+}
+
+if (netsuiteTestButton) {
+  netsuiteTestButton.addEventListener("click", () => {
+    void testNetSuiteConnection();
+  });
+}
+
+if (netsuiteClearKeyButton) {
+  netsuiteClearKeyButton.addEventListener("click", () => {
+    void saveNetSuiteSettings(true);
+  });
+}
+
+if (netsuiteExportCatalogButton) {
+  netsuiteExportCatalogButton.addEventListener("click", () => {
+    void exportNetSuiteMetadataCatalog();
+  });
+}
+
+if (netsuitePropertyList) {
+  netsuitePropertyList.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-netsuite-property-slug]") : null;
+    if (!target) {
+      return;
+    }
+
+    const propertySlug = target.getAttribute("data-netsuite-property-slug");
+    if (propertySlug) {
+      void loadNetSuiteWorkspace(propertySlug);
+    }
+  });
+}
+
+if (netsuiteAttachmentSelect) {
+  netsuiteAttachmentSelect.addEventListener("change", () => {
+    const propertySlug = state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.property
+      ? state.netsuitePostingWorkspace.property.property_slug
+      : "";
+    const attachmentId = Number(netsuiteAttachmentSelect.value);
+    if (propertySlug && Number.isInteger(attachmentId) && attachmentId > 0) {
+      void loadNetSuiteWorkspace(propertySlug, attachmentId);
+    }
+  });
+}
+
+if (netsuitePostingForm) {
+  netsuitePostingForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveNetSuitePostingSetup();
+  });
+}
+
+if (netsuitePostingRefreshButton) {
+  netsuitePostingRefreshButton.addEventListener("click", () => {
+    const propertySlug = state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.property
+      ? state.netsuitePostingWorkspace.property.property_slug
+      : "";
+    const attachmentId = Number(netsuiteAttachmentSelect && netsuiteAttachmentSelect.value);
+    if (propertySlug) {
+      void loadNetSuiteWorkspace(propertySlug, Number.isInteger(attachmentId) && attachmentId > 0 ? attachmentId : null);
+    }
+  });
+}
+
+if (netsuitePostingPreviewButton) {
+  netsuitePostingPreviewButton.addEventListener("click", () => {
+    void buildNetSuitePostingPreview();
+  });
+}
+
+if (netsuitePostingSubmitButton) {
+  netsuitePostingSubmitButton.addEventListener("click", () => {
+    void submitNetSuitePostingPreview();
+  });
+}
+
+if (netsuitePostingRuns) {
+  netsuitePostingRuns.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-netsuite-run-id]") : null;
+    if (!target) {
+      return;
+    }
+
+    const runId = target.getAttribute("data-netsuite-run-id");
+    if (!runId || !state.netsuitePostingWorkspace || !Array.isArray(state.netsuitePostingWorkspace.runs)) {
+      return;
+    }
+
+    const selected = state.netsuitePostingWorkspace.runs.find((entry) => entry.id === runId) || null;
+    if (selected) {
+      state.netsuitePostingSelectedRunId = runId;
+      renderNetSuitePosting();
+    }
+  });
+}
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !propertyModal.classList.contains("hidden")) {
+  if (propertyModal && event.key === "Escape" && !propertyModal.classList.contains("hidden")) {
     closePropertyModal();
   }
 });
 
+window.addEventListener("hashchange", () => {
+  syncCurrentPageFromHash();
+});
+
+syncCurrentPageFromHash();
 void refreshDashboard("Loading dashboard...");
 
 async function triggerRun() {
-  setLoading(true, "Running mailbox sync. This can take a moment if new attachments arrived.");
+  setLoading(true, "Running a full mailbox rescan. This can take longer because older Inbox mail is included.");
 
   try {
-    const result = await fetchJson("/api/ingest/run", { method: "POST" });
+    const result = await fetchJson("/api/ingest/run", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ fullRescan: true })
+    });
     const statusLabel = result.status === "completed"
-      ? `Mailbox sync completed. Run #${result.runId} finished successfully.`
-      : `Mailbox sync finished with failures. Run #${result.runId}.`;
+      ? `Mailbox rescan completed. Run #${result.runId} finished successfully.`
+      : `Mailbox rescan finished with failures. Run #${result.runId}.`;
 
     await refreshDashboard(statusLabel);
   } catch (error) {
@@ -120,11 +457,68 @@ async function triggerRun() {
   }
 }
 
+async function triggerReparse() {
+  setLoading(true, "Reparsing archived reports from storage/raw. This rebuilds parsed outputs and CSV staging files.");
+
+  try {
+    const result = await fetchJson("/api/ingest/reparse", { method: "POST" });
+    const statusLabel = result.status === "completed"
+      ? `Stored reports reparsed. Run #${result.runId} rebuilt the local staging data.`
+      : `Stored report reparse finished with failures. Run #${result.runId}.`;
+
+    await refreshDashboard(statusLabel);
+  } catch (error) {
+    renderError(error);
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function logout() {
+  if (logoutButton) {
+    logoutButton.disabled = true;
+  }
+
+  try {
+    await fetch("/api/auth/logout", {
+      method: "POST"
+    });
+  } finally {
+    window.location.href = "/login";
+  }
+}
+
 async function refreshDashboard(statusMessage) {
   setLoading(true, statusMessage);
 
   try {
     state.dashboard = await fetchJson("/api/dashboard");
+    state.currentUser = state.dashboard.currentUser || null;
+
+    if (isAdmin()) {
+      const usersPayload = await fetchJson("/api/users");
+      state.users = Array.isArray(usersPayload.users) ? usersPayload.users : [];
+
+      const approvedSendersPayload = await fetchJson("/api/settings/approved-senders");
+      state.approvedSenderPatterns = Array.isArray(approvedSendersPayload.patterns)
+        ? approvedSendersPayload.patterns
+        : [];
+      state.approvedSenderSource = approvedSendersPayload.source === "database" ? "database" : "default";
+
+      state.netsuiteSettings = await fetchJson("/api/settings/netsuite");
+      const netsuitePropertyPayload = await fetchJson("/api/netsuite/properties");
+      state.netsuitePostingProperties = Array.isArray(netsuitePropertyPayload.properties)
+        ? netsuitePropertyPayload.properties
+        : [];
+    } else {
+      state.users = [];
+      state.approvedSenderPatterns = [];
+      state.approvedSenderSource = "default";
+      state.netsuiteSettings = null;
+      state.netsuitePostingProperties = [];
+      state.netsuitePostingWorkspace = null;
+      state.netsuitePostingSelectedRunId = "";
+    }
 
     if (state.dashboard.latestRun && Number.isInteger(state.dashboard.latestRun.id)) {
       state.latestRun = await fetchJson("/api/runs/latest");
@@ -137,8 +531,39 @@ async function refreshDashboard(statusMessage) {
       showPropertyModal();
     }
 
+    if (
+      isAdmin()
+      && state.netsuitePostingWorkspace
+      && state.netsuitePostingWorkspace.property
+      && state.netsuitePostingWorkspace.property.property_slug
+    ) {
+      const selectedAttachmentId = state.netsuitePostingWorkspace.selectedAttachment
+        ? Number(state.netsuitePostingWorkspace.selectedAttachment.attachmentId)
+        : null;
+      state.netsuitePostingWorkspace = await fetchNetSuiteWorkspace(
+        state.netsuitePostingWorkspace.property.property_slug,
+        Number.isInteger(selectedAttachmentId) && selectedAttachmentId > 0 ? selectedAttachmentId : null
+      );
+      if (
+        !state.netsuitePostingSelectedRunId
+        && Array.isArray(state.netsuitePostingWorkspace.runs)
+        && state.netsuitePostingWorkspace.runs.length > 0
+      ) {
+        state.netsuitePostingSelectedRunId = state.netsuitePostingWorkspace.runs[0].id || "";
+      }
+    }
+
+    if (!isPageAllowed(state.currentPage)) {
+      setCurrentPage("overview", { replaceHash: true });
+    }
+
     render();
   } catch (error) {
+    if (error && /Authentication required/i.test(String(error.message || error))) {
+      window.location.href = "/login";
+      return;
+    }
+
     renderError(error);
   } finally {
     setLoading(false);
@@ -153,8 +578,10 @@ async function openPropertyModal(propertySlug) {
   propertyModalTitle.textContent = "Loading property...";
   propertyModalSubhead.textContent = "Fetching reports and export details.";
   propertyModalSummary.innerHTML = "";
-  propertyNameInput.value = "";
-  propertySlugInput.value = "";
+  if (propertyEditorAvailable) {
+    propertyNameInput.value = "";
+    propertySlugInput.value = "";
+  }
   setPropertyFormStatus("Loading property details...", "empty");
   propertyHistoryCaption.textContent = "Loading report history";
   propertyHistoryBrowser.innerHTML = "";
@@ -175,7 +602,7 @@ async function openPropertyModal(propertySlug) {
 }
 
 async function savePropertyEdits() {
-  if (!state.selectedProperty || !state.selectedProperty.property) {
+  if (!isAdmin() || !propertyEditorAvailable || !state.selectedProperty || !state.selectedProperty.property) {
     return;
   }
 
@@ -211,20 +638,67 @@ async function savePropertyEdits() {
 }
 
 function closePropertyModal() {
+  if (!propertyModal) {
+    return;
+  }
+
   propertyModal.classList.add("hidden");
   propertyModal.setAttribute("aria-hidden", "true");
 }
 
 function showPropertyModal() {
+  if (!propertyModal) {
+    return;
+  }
+
   propertyModal.classList.remove("hidden");
   propertyModal.setAttribute("aria-hidden", "false");
 }
 
 function render() {
+  renderNavigation();
+  renderAccount();
   renderOverview();
   renderProperties();
+  renderNetSuitePosting();
   renderLatestRun();
+  renderSettings();
   renderPropertyModal();
+}
+
+function renderNavigation() {
+  for (const link of pageLinks) {
+    const page = normalizePage(link.getAttribute("data-page-link"));
+    const allowed = isPageAllowed(page);
+    const isActive = page === state.currentPage;
+    link.hidden = !allowed;
+    link.classList.toggle("active", isActive);
+    if (isActive) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  }
+
+  for (const view of pageViews) {
+    const page = normalizePage(view.getAttribute("data-page"));
+    const isActive = isPageAllowed(page) && page === state.currentPage;
+    view.classList.toggle("is-active", isActive);
+    view.hidden = !isActive;
+  }
+}
+
+function renderAccount() {
+  if (!heroAccount) {
+    return;
+  }
+
+  if (!state.currentUser) {
+    heroAccount.textContent = "Not signed in";
+    return;
+  }
+
+  heroAccount.textContent = `Signed in as ${state.currentUser.username} (${state.currentUser.role})`;
 }
 
 function renderOverview() {
@@ -277,6 +751,98 @@ function renderProperties() {
       </div>
     </article>
   `).join("");
+}
+
+function renderNetSuitePosting() {
+  if (!netsuitePostingAvailable) {
+    return;
+  }
+
+  syncNetSuitePostingControls();
+  if (!isAdmin()) {
+    netsuitePropertyStatus.textContent = "Only admins can use the NetSuite posting workspace.";
+    netsuitePropertyStatus.className = "form-status empty";
+    netsuitePropertyList.innerHTML = '<div class="empty">Admin access is required for NetSuite posting work.</div>';
+    netsuiteWorkspace.hidden = true;
+    netsuiteWorkspaceEmpty.hidden = false;
+    netsuiteWorkspaceEmpty.textContent = "Only admins can use the NetSuite posting workspace.";
+    return;
+  }
+
+  const properties = Array.isArray(state.netsuitePostingProperties) ? state.netsuitePostingProperties : [];
+  netsuitePropertyStatus.textContent = state.netsuitePostingLoading
+    ? "Loading NetSuite posting workspace..."
+    : (
+      properties.length > 0
+        ? `${properties.length} properties currently have supported monetary report families.`
+        : "No parsed monetary report families are available yet."
+    );
+  netsuitePropertyStatus.className = `form-status ${properties.length > 0 ? "success" : "empty"}`;
+
+  if (properties.length === 0) {
+    netsuitePropertyList.innerHTML = '<div class="empty">Run a sync or reparse once hotel monetary reports are available.</div>';
+  } else {
+    const selectedSlug = state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.property
+      ? state.netsuitePostingWorkspace.property.property_slug
+      : "";
+    netsuitePropertyList.innerHTML = properties.map((property) => `
+      <article class="attachment-card${property.property_slug === selectedSlug ? " is-selected" : ""}">
+        <div class="attachment-top">
+          <div>
+            <strong>${escapeHtml(property.property_name || "Unassigned Property")}</strong>
+            <div class="attachment-meta">
+              <span><code>${escapeHtml(property.property_slug || "unassigned-property")}</code></span>
+              <span>Supported attachments: ${escapeHtml(String(property.attachment_count || 0))}</span>
+              <span>Latest received: ${escapeHtml(formatDateTime(property.last_received_at))}</span>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar-row">
+          <button class="secondary" type="button" data-netsuite-property-slug="${escapeHtml(property.property_slug || "")}">Open Workspace</button>
+        </div>
+      </article>
+    `).join("");
+  }
+
+  if (!state.netsuitePostingWorkspace || !state.netsuitePostingWorkspace.property) {
+    netsuiteWorkspace.hidden = true;
+    netsuiteWorkspaceEmpty.hidden = false;
+    netsuiteWorkspaceEmpty.textContent = "Select a property to load its NetSuite posting workspace.";
+    netsuiteWorkspaceSummary.innerHTML = "";
+    netsuitePostingMappings.innerHTML = "";
+    netsuitePostingPreview.innerHTML = "";
+    netsuitePostingRuns.innerHTML = "";
+    return;
+  }
+
+  const workspace = state.netsuitePostingWorkspace;
+  const property = workspace.property;
+  const selectedAttachment = workspace.selectedAttachment || null;
+  netsuiteWorkspace.hidden = false;
+  netsuiteWorkspaceEmpty.hidden = true;
+
+  const summaryCards = [
+    ["Property", property.property_name || property.property_slug || "Property"],
+    ["Supported Attachments", Array.isArray(workspace.supportedAttachments) ? workspace.supportedAttachments.length : 0],
+    ["Selected Report", selectedAttachment ? selectedAttachment.reportTitle : "None selected"],
+    ["Report Date", selectedAttachment && selectedAttachment.reportDate ? selectedAttachment.reportDate : "Not detected"],
+    ["Received", selectedAttachment ? formatDateTime(selectedAttachment.receivedAt) : "Unknown"],
+    ["Discovered Items", workspace.discoverySummary ? workspace.discoverySummary.discoveredItemCount : 0]
+  ];
+
+  netsuiteWorkspaceSummary.innerHTML = summaryCards.map(([label, value]) => `
+    <article class="metric-card">
+      <div class="metric-value">${escapeHtml(String(value))}</div>
+      <div class="metric-label">${escapeHtml(label)}</div>
+    </article>
+  `).join("");
+
+  renderNetSuiteAttachmentOptions(workspace);
+  renderNetSuitePostingDefaults(workspace.defaults);
+  setNetSuitePostingStatus(state.netsuitePostingStatus, state.netsuitePostingTone);
+  renderNetSuitePostingMappings(workspace.mappings || []);
+  renderNetSuitePostingPreview(workspace.runs || []);
+  renderNetSuitePostingRuns(workspace.runs || []);
 }
 
 function renderLatestRun() {
@@ -347,6 +913,560 @@ function renderLatestRun() {
   `).join("");
 }
 
+function renderSettings() {
+  if (!viewerSettingsAvailable && !approvedSenderSettingsAvailable && !netsuiteSettingsAvailable) {
+    return;
+  }
+
+  syncViewerFormControls();
+  syncApprovedSenderFormControls();
+  syncNetSuiteFormControls();
+
+  if (!isAdmin()) {
+    if (viewerSettingsAvailable) {
+      viewerUserList.innerHTML = '<div class="empty">Only admins can manage viewer accounts.</div>';
+      setViewerFormStatus("Only admins can manage viewer accounts.", "empty");
+    }
+    if (approvedSenderSettingsAvailable) {
+      approvedSendersInput.value = "";
+      setApprovedSenderStatus("Only admins can manage sender allowlist settings.", "empty");
+    }
+    if (netsuiteSettingsAvailable) {
+      setNetSuiteStatus("Only admins can manage NetSuite connector settings.", "empty");
+      renderNetSuiteSettings();
+    }
+    return;
+  }
+
+  if (approvedSenderSettingsAvailable) {
+    approvedSendersStatus.textContent = state.approvedSenderStatus;
+    approvedSendersStatus.className = `form-status ${state.approvedSenderTone}`;
+    if (document.activeElement !== approvedSendersInput && !state.approvedSenderSaving) {
+      approvedSendersInput.value = state.approvedSenderPatterns.join("\n");
+    }
+  }
+
+  renderNetSuiteSettings();
+
+  if (!viewerSettingsAvailable) {
+    return;
+  }
+
+  viewerFormStatus.textContent = state.viewerFormStatus;
+  viewerFormStatus.className = `form-status ${state.viewerFormTone}`;
+
+  if (!Array.isArray(state.users) || state.users.length === 0) {
+    viewerUserList.innerHTML = '<div class="empty">No users have been recorded yet.</div>';
+    return;
+  }
+
+  viewerUserList.innerHTML = state.users.map((user) => `
+    <article class="attachment-card">
+      <div class="attachment-top">
+        <div>
+          <strong>${escapeHtml(user.username)}</strong>
+          <div class="attachment-meta">
+            <span>Role: ${escapeHtml(user.role)}</span>
+            <span>Created: ${escapeHtml(formatDateTime(user.createdAt))}</span>
+          </div>
+        </div>
+        <span class="status-chip ${slugify(user.role)}">${escapeHtml(user.role)}</span>
+      </div>
+      <form class="user-password-form" data-password-user-id="${escapeHtml(String(user.id))}">
+        <label class="form-field">
+          <span>${user.role === "admin" ? "Admin password" : "Viewer password"}</span>
+          <input
+            name="password"
+            type="password"
+            placeholder="At least 8 characters"
+            autocomplete="new-password"
+            minlength="8"
+            ${Number(user.id) === state.userPasswordSavingId ? "disabled" : ""}
+            required
+          >
+        </label>
+        <div class="toolbar-row">
+          <button
+            class="secondary"
+            type="submit"
+            ${Number(user.id) === state.userPasswordSavingId ? "disabled" : ""}
+          >${Number(user.id) === state.userPasswordSavingId ? "Saving..." : "Change Password"}</button>
+          ${user.role === "viewer" ? `
+            <button
+              class="secondary"
+              type="button"
+              data-delete-user-id="${escapeHtml(String(user.id))}"
+              ${Number(user.id) === state.viewerDeletingUserId ? "disabled" : ""}
+            >${Number(user.id) === state.viewerDeletingUserId ? "Removing..." : "Remove Viewer"}</button>
+          ` : '<span class="badge">Permanent admin</span>'}
+        </div>
+      </form>
+    </article>
+  `).join("");
+}
+
+function renderNetSuiteAttachmentOptions(workspace) {
+  if (!netsuiteAttachmentSelect) {
+    return;
+  }
+
+  const attachments = Array.isArray(workspace.supportedAttachments) ? workspace.supportedAttachments : [];
+  const selectedAttachmentId = workspace.selectedAttachment ? Number(workspace.selectedAttachment.attachmentId) : 0;
+  netsuiteAttachmentSelect.innerHTML = attachments.map((attachment) => `
+    <option value="${escapeHtml(String(attachment.attachmentId))}" ${attachment.attachmentId === selectedAttachmentId ? "selected" : ""}>
+      ${escapeHtml([
+        attachment.reportTitle || attachment.reportType,
+        attachment.reportDate || "no report date",
+        formatDateTime(attachment.receivedAt)
+      ].join(" | "))}
+    </option>
+  `).join("");
+}
+
+function renderNetSuitePostingDefaults(defaults) {
+  if (!netsuitePostingAvailable || !defaults) {
+    return;
+  }
+
+  if (document.activeElement !== netsuitePostingExternalPrefix && !state.netsuitePostingSaving) {
+    netsuitePostingExternalPrefix.value = defaults.externalIdPrefix || "";
+  }
+  if (document.activeElement !== netsuitePostingBalancingGl && !state.netsuitePostingSaving) {
+    netsuitePostingBalancingGl.value = defaults.balancingGlCode || "";
+  }
+  if (document.activeElement !== netsuitePostingMemoTemplate && !state.netsuitePostingSaving) {
+    netsuitePostingMemoTemplate.value = defaults.memoTemplate || "";
+  }
+  if (document.activeElement !== netsuitePostingSubsidiaryId && !state.netsuitePostingSaving) {
+    netsuitePostingSubsidiaryId.value = defaults.subsidiaryId || "";
+  }
+  if (document.activeElement !== netsuitePostingCurrencyId && !state.netsuitePostingSaving) {
+    netsuitePostingCurrencyId.value = defaults.currencyId || "";
+  }
+  if (document.activeElement !== netsuitePostingLocationId && !state.netsuitePostingSaving) {
+    netsuitePostingLocationId.value = defaults.locationId || "";
+  }
+  if (document.activeElement !== netsuitePostingDepartmentId && !state.netsuitePostingSaving) {
+    netsuitePostingDepartmentId.value = defaults.departmentId || "";
+  }
+  if (document.activeElement !== netsuitePostingClassId && !state.netsuitePostingSaving) {
+    netsuitePostingClassId.value = defaults.classId || "";
+  }
+}
+
+function renderNetSuitePostingMappings(mappings) {
+  if (!netsuitePostingMappings || !netsuitePostingMappingSummary) {
+    return;
+  }
+
+  if (!Array.isArray(mappings) || mappings.length === 0) {
+    netsuitePostingMappingSummary.className = "notes-block empty";
+    netsuitePostingMappingSummary.textContent = "No monetary items were discovered for the selected attachment.";
+    netsuitePostingMappings.innerHTML = "";
+    return;
+  }
+
+  const missingCount = mappings.filter((entry) => !(entry.netsuiteGlCode || "").trim()).length;
+  netsuitePostingMappingSummary.className = "notes-block";
+  netsuitePostingMappingSummary.innerHTML = `
+    <strong>${escapeHtml(String(mappings.length))} discovered monetary items</strong>
+    <div class="attachment-meta">
+      <span>Missing GL codes: ${escapeHtml(String(missingCount))}</span>
+      <span>Defaults can be overridden per line before preview.</span>
+    </div>
+  `;
+
+  netsuitePostingMappings.innerHTML = `
+    <div class="report-table-wrap">
+      <table class="data-table netsuite-posting-table">
+        <thead>
+          <tr>
+            <th>Group</th>
+            <th>Item</th>
+            <th>Amount Field</th>
+            <th>Current Amount</th>
+            <th>GL Code</th>
+            <th>Polarity</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${mappings.map((mapping) => `
+            <tr data-netsuite-mapping-key="${escapeHtml(mapping.mappingKey || "")}">
+              <td>${escapeHtml(mapping.groupLabel || "")}</td>
+              <td>${escapeHtml(mapping.itemLabel || "")}</td>
+              <td>${escapeHtml(mapping.amountFieldLabel || mapping.amountField || "")}</td>
+              <td>${escapeHtml(mapping.currentAmount || "0.00")}</td>
+              <td>
+                <input
+                  type="text"
+                  class="table-input"
+                  value="${escapeHtml(mapping.netsuiteGlCode || "")}"
+                  data-netsuite-gl-code="1"
+                  placeholder="Account number"
+                >
+              </td>
+              <td>
+                <select class="table-input" data-netsuite-posting-polarity="1">
+                  <option value="debit_positive" ${mapping.postingPolarity === "debit_positive" ? "selected" : ""}>Debit positive</option>
+                  <option value="credit_positive" ${mapping.postingPolarity === "credit_positive" ? "selected" : ""}>Credit positive</option>
+                </select>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderNetSuitePostingPreview(runs) {
+  if (!netsuitePostingPreview) {
+    return;
+  }
+
+  const selectedRun = getSelectedNetSuiteRun(runs);
+  if (!selectedRun || !selectedRun.previewPayload) {
+    netsuitePostingPreview.innerHTML = '<div class="empty">Build a preview to inspect the posting lines and balance checks.</div>';
+    return;
+  }
+
+  const preview = selectedRun.previewPayload;
+  const validations = Array.isArray(preview.validations) ? preview.validations : [];
+  const lines = Array.isArray(preview.lines) ? preview.lines : [];
+
+  netsuitePostingPreview.innerHTML = `
+    <section class="report-section">
+      <div class="settings-card-head">
+        <div>
+          <h3>Selected Preview</h3>
+          <p class="subhead">${escapeHtml(preview.reportTitle || "Report")} for ${escapeHtml(preview.reportDate || preview.accountingDate || "undated report")}</p>
+        </div>
+        <div class="badge ${selectedRun.status === "submitted" ? "success" : (selectedRun.status === "failed" ? "danger" : "")}">
+          ${escapeHtml(selectedRun.status || "preview")}
+        </div>
+      </div>
+      <div class="attachment-meta">
+        <span>External ID: <code>${escapeHtml(preview.externalId || "")}</code></span>
+        <span>Memo: ${escapeHtml(preview.memo || "")}</span>
+        <span>Debits: ${escapeHtml(preview.summary ? preview.summary.debitTotal : "0.00")}</span>
+        <span>Credits: ${escapeHtml(preview.summary ? preview.summary.creditTotal : "0.00")}</span>
+        <span>Balance difference: ${escapeHtml(preview.summary ? preview.summary.balanceDifference : "0.00")}</span>
+      </div>
+      ${validations.length > 0 ? `
+        <div class="notes-block">
+          <strong>Validations</strong>
+          <ul class="note-list">
+            ${validations.map((validation) => `
+              <li>${escapeHtml(`${validation.level.toUpperCase()}: ${validation.message}`)}</li>
+            `).join("")}
+          </ul>
+        </div>
+      ` : '<div class="notes-block success"><strong>No preview validations were raised.</strong></div>'}
+      <div class="report-table-wrap">
+        <table class="data-table netsuite-posting-table">
+          <thead>
+            <tr>
+              <th>Group</th>
+              <th>Item</th>
+              <th>GL Code</th>
+              <th>Amount</th>
+              <th>Debit</th>
+              <th>Credit</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${lines.map((line) => `
+              <tr>
+                <td>${escapeHtml(line.groupLabel || "")}</td>
+                <td>${escapeHtml(line.itemLabel || "")}</td>
+                <td>${escapeHtml(line.glCode || "")}</td>
+                <td>${escapeHtml(line.rawAmount || "0.00")}</td>
+                <td>${escapeHtml(line.debit || "0.00")}</td>
+                <td>${escapeHtml(line.credit || "0.00")}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderNetSuitePostingRuns(runs) {
+  if (!netsuitePostingRuns) {
+    return;
+  }
+
+  if (!Array.isArray(runs) || runs.length === 0) {
+    netsuitePostingRuns.innerHTML = '<div class="empty">No saved NetSuite posting previews have been recorded yet.</div>';
+    return;
+  }
+
+  const selectedRun = getSelectedNetSuiteRun(runs);
+  netsuitePostingRuns.innerHTML = `
+    <section class="report-section">
+      <div class="settings-card-head">
+        <div>
+          <h3>Saved Preview And Submit History</h3>
+          <p class="subhead">Each preview is persisted so we can reload it before deciding whether to post it.</p>
+        </div>
+      </div>
+      <div class="list-grid">
+        ${runs.map((run) => `
+          <article class="attachment-card${selectedRun && selectedRun.id === run.id ? " is-selected" : ""}">
+            <div class="attachment-top">
+              <div>
+                <strong>${escapeHtml(run.report_title || run.report_type || "Posting run")}</strong>
+                <div class="attachment-meta">
+                  <span>${escapeHtml(run.report_date || "No report date")}</span>
+                  <span>Created: ${escapeHtml(formatDateTime(run.created_at))}</span>
+                  <span>By: ${escapeHtml(run.created_by_username || "unknown")}</span>
+                </div>
+              </div>
+              <span class="status-chip ${slugify(run.status || "preview")}">${escapeHtml(run.status || "preview")}</span>
+            </div>
+            <div class="attachment-meta">
+              <span>External ID: <code>${escapeHtml(run.external_id || "")}</code></span>
+              ${run.netsuite_response_summary ? `<span>${escapeHtml(run.netsuite_response_summary)}</span>` : ""}
+              ${run.error_message ? `<span>${escapeHtml(run.error_message)}</span>` : ""}
+            </div>
+            <div class="toolbar-row">
+              <button class="secondary" type="button" data-netsuite-run-id="${escapeHtml(run.id || "")}">Load Preview</button>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function syncNetSuitePostingControls() {
+  if (!netsuitePostingAvailable) {
+    return;
+  }
+
+  const busy = state.netsuitePostingLoading || state.netsuitePostingSaving || state.netsuitePostingPreviewing || state.netsuitePostingSubmitting || !isAdmin();
+  const hasWorkspace = Boolean(state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.selectedAttachment);
+  netsuiteAttachmentSelect.disabled = busy || !hasWorkspace;
+  netsuitePostingExternalPrefix.disabled = busy || !hasWorkspace;
+  netsuitePostingBalancingGl.disabled = busy || !hasWorkspace;
+  netsuitePostingMemoTemplate.disabled = busy || !hasWorkspace;
+  netsuitePostingSubsidiaryId.disabled = busy || !hasWorkspace;
+  netsuitePostingCurrencyId.disabled = busy || !hasWorkspace;
+  netsuitePostingLocationId.disabled = busy || !hasWorkspace;
+  netsuitePostingDepartmentId.disabled = busy || !hasWorkspace;
+  netsuitePostingClassId.disabled = busy || !hasWorkspace;
+  netsuitePostingRefreshButton.disabled = busy || !hasWorkspace;
+  netsuitePostingSaveButton.disabled = busy || !hasWorkspace;
+  netsuitePostingPreviewButton.disabled = busy || !hasWorkspace;
+  netsuitePostingSubmitButton.disabled = busy || !hasWorkspace || !getSelectedNetSuiteRun(state.netsuitePostingWorkspace ? state.netsuitePostingWorkspace.runs : []);
+}
+
+function setNetSuitePostingStatus(message, tone) {
+  state.netsuitePostingStatus = message;
+  state.netsuitePostingTone = tone;
+  if (!netsuitePostingStatus) {
+    return;
+  }
+
+  netsuitePostingStatus.textContent = message;
+  netsuitePostingStatus.className = `form-status ${tone}`;
+}
+
+async function loadNetSuiteWorkspace(propertySlug, attachmentId = null) {
+  if (!isAdmin() || !netsuitePostingAvailable) {
+    return;
+  }
+
+  state.netsuitePostingLoading = true;
+  setNetSuitePostingStatus("Loading NetSuite posting workspace...", "empty");
+  syncNetSuitePostingControls();
+
+  try {
+    state.netsuitePostingWorkspace = await fetchNetSuiteWorkspace(propertySlug, attachmentId);
+    state.netsuitePostingSelectedRunId = Array.isArray(state.netsuitePostingWorkspace.runs) && state.netsuitePostingWorkspace.runs.length > 0
+      ? state.netsuitePostingWorkspace.runs[0].id || ""
+      : "";
+    setNetSuitePostingStatus("NetSuite posting workspace loaded.", "success");
+    renderNetSuitePosting();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuitePostingStatus(message, "error");
+  } finally {
+    state.netsuitePostingLoading = false;
+    syncNetSuitePostingControls();
+    renderNetSuitePosting();
+  }
+}
+
+async function saveNetSuitePostingSetup() {
+  if (!isAdmin() || !state.netsuitePostingWorkspace || !state.netsuitePostingWorkspace.property) {
+    return;
+  }
+
+  const propertySlug = state.netsuitePostingWorkspace.property.property_slug;
+  const attachmentId = Number(netsuiteAttachmentSelect.value);
+  state.netsuitePostingSaving = true;
+  setNetSuitePostingStatus("Saving NetSuite posting setup...", "empty");
+  syncNetSuitePostingControls();
+
+  try {
+    state.netsuitePostingWorkspace = await fetchJson(`/api/netsuite/properties/${encodeURIComponent(propertySlug)}`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        attachmentId,
+        mappings: collectNetSuitePostingMappings(),
+        defaults: collectNetSuitePostingDefaults()
+      })
+    });
+    state.netsuitePostingSelectedRunId = Array.isArray(state.netsuitePostingWorkspace.runs) && state.netsuitePostingWorkspace.runs.length > 0
+      ? state.netsuitePostingSelectedRunId || state.netsuitePostingWorkspace.runs[0].id || ""
+      : "";
+    setNetSuitePostingStatus("NetSuite posting setup saved.", "success");
+    renderNetSuitePosting();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuitePostingStatus(message, "error");
+  } finally {
+    state.netsuitePostingSaving = false;
+    syncNetSuitePostingControls();
+  }
+}
+
+async function buildNetSuitePostingPreview() {
+  if (!isAdmin() || !state.netsuitePostingWorkspace || !state.netsuitePostingWorkspace.property) {
+    return;
+  }
+
+  const propertySlug = state.netsuitePostingWorkspace.property.property_slug;
+  const attachmentId = Number(netsuiteAttachmentSelect.value);
+  state.netsuitePostingPreviewing = true;
+  setNetSuitePostingStatus("Building the NetSuite posting preview...", "empty");
+  syncNetSuitePostingControls();
+
+  try {
+    const result = await fetchJson(`/api/netsuite/properties/${encodeURIComponent(propertySlug)}/preview`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        attachmentId,
+        mappings: collectNetSuitePostingMappings(),
+        defaults: collectNetSuitePostingDefaults()
+      })
+    });
+    state.netsuitePostingWorkspace = result.workspace || state.netsuitePostingWorkspace;
+    state.netsuitePostingSelectedRunId = result.run && result.run.id
+      ? result.run.id
+      : (
+        Array.isArray(state.netsuitePostingWorkspace.runs) && state.netsuitePostingWorkspace.runs.length > 0
+          ? state.netsuitePostingWorkspace.runs[0].id || ""
+          : ""
+      );
+    setNetSuitePostingStatus(
+      result.run && result.run.previewPayload && result.run.previewPayload.summary && result.run.previewPayload.summary.postable
+        ? "NetSuite posting preview is balanced and ready for submission."
+        : "NetSuite posting preview built. Review the validations before submitting.",
+      result.run && result.run.previewPayload && result.run.previewPayload.summary && result.run.previewPayload.summary.postable ? "success" : "empty"
+    );
+    renderNetSuitePosting();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuitePostingStatus(message, "error");
+  } finally {
+    state.netsuitePostingPreviewing = false;
+    syncNetSuitePostingControls();
+  }
+}
+
+async function submitNetSuitePostingPreview() {
+  if (!isAdmin() || !state.netsuitePostingWorkspace || !state.netsuitePostingWorkspace.property) {
+    return;
+  }
+
+  const propertySlug = state.netsuitePostingWorkspace.property.property_slug;
+  const selectedRun = getSelectedNetSuiteRun(state.netsuitePostingWorkspace.runs || []);
+  if (!selectedRun || !selectedRun.id) {
+    setNetSuitePostingStatus("Load or build a saved preview before submitting to NetSuite.", "error");
+    return;
+  }
+
+  state.netsuitePostingSubmitting = true;
+  setNetSuitePostingStatus("Submitting the saved preview to NetSuite...", "empty");
+  syncNetSuitePostingControls();
+
+  try {
+    const result = await fetchJson(`/api/netsuite/properties/${encodeURIComponent(propertySlug)}/runs/${encodeURIComponent(selectedRun.id)}/submit`, {
+      method: "POST"
+    });
+    if (Array.isArray(state.netsuitePostingWorkspace.runs)) {
+      state.netsuitePostingWorkspace.runs = state.netsuitePostingWorkspace.runs.map((run) => run.id === result.run.id ? result.run : run);
+    }
+    state.netsuitePostingSelectedRunId = result.run.id || state.netsuitePostingSelectedRunId;
+    setNetSuitePostingStatus(result.run.netsuite_response_summary || "NetSuite journal submitted.", "success");
+    renderNetSuitePosting();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuitePostingStatus(message, "error");
+    try {
+      state.netsuitePostingWorkspace = await fetchNetSuiteWorkspace(propertySlug, Number(netsuiteAttachmentSelect.value));
+      renderNetSuitePosting();
+    } catch {
+      // Keep the current workspace if the follow-up refresh fails.
+    }
+  } finally {
+    state.netsuitePostingSubmitting = false;
+    syncNetSuitePostingControls();
+  }
+}
+
+async function fetchNetSuiteWorkspace(propertySlug, attachmentId = null) {
+  const suffix = attachmentId ? `?attachmentId=${encodeURIComponent(String(attachmentId))}` : "";
+  return fetchJson(`/api/netsuite/properties/${encodeURIComponent(propertySlug)}${suffix}`);
+}
+
+function collectNetSuitePostingMappings() {
+  if (!netsuitePostingMappings) {
+    return [];
+  }
+
+  return Array.from(netsuitePostingMappings.querySelectorAll("tr[data-netsuite-mapping-key]")).map((row) => {
+    const mappingKey = row.getAttribute("data-netsuite-mapping-key") || "";
+    const glInput = row.querySelector("input[data-netsuite-gl-code]");
+    const polarityInput = row.querySelector("select[data-netsuite-posting-polarity]");
+    return {
+      mappingKey,
+      netsuiteGlCode: glInput instanceof HTMLInputElement ? glInput.value.trim() : "",
+      postingPolarity: polarityInput instanceof HTMLSelectElement ? polarityInput.value : "debit_positive"
+    };
+  });
+}
+
+function collectNetSuitePostingDefaults() {
+  return {
+    externalIdPrefix: netsuitePostingExternalPrefix ? netsuitePostingExternalPrefix.value.trim() : "",
+    balancingGlCode: netsuitePostingBalancingGl ? netsuitePostingBalancingGl.value.trim() : "",
+    memoTemplate: netsuitePostingMemoTemplate ? netsuitePostingMemoTemplate.value.trim() : "",
+    subsidiaryId: netsuitePostingSubsidiaryId ? netsuitePostingSubsidiaryId.value.trim() : "",
+    currencyId: netsuitePostingCurrencyId ? netsuitePostingCurrencyId.value.trim() : "",
+    locationId: netsuitePostingLocationId ? netsuitePostingLocationId.value.trim() : "",
+    departmentId: netsuitePostingDepartmentId ? netsuitePostingDepartmentId.value.trim() : "",
+    classId: netsuitePostingClassId ? netsuitePostingClassId.value.trim() : ""
+  };
+}
+
+function getSelectedNetSuiteRun(runs) {
+  if (!Array.isArray(runs) || runs.length === 0) {
+    return null;
+  }
+
+  return runs.find((run) => run.id === state.netsuitePostingSelectedRunId) || runs[0];
+}
+
 function renderPropertyModal() {
   if (!state.selectedProperty || !state.selectedProperty.property) {
     return;
@@ -355,11 +1475,13 @@ function renderPropertyModal() {
   const property = state.selectedProperty.property;
   propertyModalTitle.textContent = property.property_name || "Unassigned Property";
   propertyModalSubhead.textContent = `Viewing reports archived under ${property.property_slug || "unassigned-property"}.`;
-  propertyNameInput.value = property.property_name || "";
-  propertySlugInput.value = property.property_slug || "";
-  syncPropertyFormControls();
-  propertyFormStatus.textContent = state.propertyFormStatus;
-  propertyFormStatus.className = `form-status ${state.propertyFormTone}`;
+  if (propertyEditorAvailable) {
+    propertyNameInput.value = property.property_name || "";
+    propertySlugInput.value = property.property_slug || "";
+    syncPropertyFormControls();
+    propertyFormStatus.textContent = state.propertyFormStatus;
+    propertyFormStatus.className = `form-status ${state.propertyFormTone}`;
+  }
 
   const summaryCards = [
     ["Attachments", property.attachment_count],
@@ -434,7 +1556,7 @@ function renderPropertyModal() {
       <div class="toolbar-row">
         ${attachment.id ? `<a class="export-link" href="/api/attachments/${encodeURIComponent(String(attachment.id))}/file" target="_blank" rel="noreferrer">Open Archived Report</a>` : ""}
         ${attachment.id && attachment.status === "parsed" ? `<a class="export-link" href="/api/attachments/${encodeURIComponent(String(attachment.id))}/parsed-csv">Download Parsed CSV</a>` : ""}
-        ${attachment.id && ["failed", "unsupported"].includes(String(attachment.status || "")) ? `
+        ${isAdmin() && attachment.id && ["failed", "unsupported"].includes(String(attachment.status || "")) ? `
           <button
             class="secondary"
             type="button"
@@ -449,9 +1571,16 @@ function renderPropertyModal() {
 
 function setLoading(isLoading, message) {
   state.loading = isLoading;
-  runButton.disabled = isLoading;
-  refreshButton.disabled = isLoading;
-  if (message) {
+  if (runButton) {
+    runButton.disabled = isLoading;
+  }
+  if (reparseButton) {
+    reparseButton.disabled = isLoading;
+  }
+  if (refreshButton) {
+    refreshButton.disabled = isLoading;
+  }
+  if (message && heroStatus) {
     heroStatus.textContent = message;
   }
 }
@@ -459,19 +1588,549 @@ function setLoading(isLoading, message) {
 function setPropertyFormStatus(message, tone) {
   state.propertyFormStatus = message;
   state.propertyFormTone = tone;
+  if (!propertyEditorAvailable) {
+    return;
+  }
+
   propertyFormStatus.textContent = message;
   propertyFormStatus.className = `form-status ${tone}`;
 }
 
 function syncPropertyFormControls() {
+  if (!propertyEditorAvailable) {
+    return;
+  }
+
   propertySaveButton.disabled = state.propertySaving || !state.selectedProperty;
   propertyNameInput.disabled = state.propertySaving || !state.selectedProperty;
   propertySlugInput.disabled = state.propertySaving || !state.selectedProperty;
 }
 
+function setViewerFormStatus(message, tone) {
+  state.viewerFormStatus = message;
+  state.viewerFormTone = tone;
+  if (!viewerSettingsAvailable) {
+    return;
+  }
+
+  viewerFormStatus.textContent = message;
+  viewerFormStatus.className = `form-status ${tone}`;
+}
+
+function setApprovedSenderStatus(message, tone) {
+  state.approvedSenderStatus = message;
+  state.approvedSenderTone = tone;
+  if (!approvedSendersStatus) {
+    return;
+  }
+
+  approvedSendersStatus.textContent = message;
+  approvedSendersStatus.className = `form-status ${tone}`;
+}
+
+function syncViewerFormControls() {
+  if (!viewerSettingsAvailable) {
+    return;
+  }
+
+  const disabled = state.viewerSaving || !isAdmin();
+  viewerCreateButton.disabled = disabled;
+  viewerUsernameInput.disabled = disabled;
+  viewerPasswordInput.disabled = disabled;
+}
+
+function syncApprovedSenderFormControls() {
+  if (!approvedSendersSaveButton || !approvedSendersInput) {
+    return;
+  }
+
+  const disabled = state.approvedSenderSaving || !isAdmin();
+  approvedSendersSaveButton.disabled = disabled;
+  approvedSendersInput.disabled = disabled;
+}
+
+function setNetSuiteStatus(message, tone) {
+  state.netsuiteStatus = message;
+  state.netsuiteTone = tone;
+  if (!netsuiteSettingsStatus) {
+    return;
+  }
+
+  netsuiteSettingsStatus.textContent = message;
+  netsuiteSettingsStatus.className = `form-status ${tone}`;
+}
+
+function syncNetSuiteFormControls() {
+  if (!netsuiteSettingsAvailable) {
+    return;
+  }
+
+  const settings = state.netsuiteSettings || null;
+  const unavailable = !settings || settings.masterKeyConfigured === false;
+  const busy = state.netsuiteSaving || state.netsuiteTesting || state.netsuiteCatalogExporting || !isAdmin() || unavailable;
+
+  netsuiteServiceBaseUrlInput.disabled = busy;
+  netsuiteClientIdInput.disabled = busy;
+  netsuiteCertificateIdInput.disabled = busy;
+  netsuiteJwtAlgorithmInput.disabled = busy;
+  netsuiteProbeQueryInput.disabled = busy;
+  netsuitePrivateKeyInput.disabled = busy;
+  netsuiteSaveButton.disabled = busy;
+  netsuiteTestButton.disabled = busy || !settings || !settings.hasPrivateKey;
+  netsuiteClearKeyButton.disabled = busy || !settings || !settings.hasPrivateKey;
+  netsuiteExportCatalogButton.disabled = busy || !settings || !settings.hasPrivateKey;
+}
+
+function renderNetSuiteSettings() {
+  if (!netsuiteSettingsAvailable) {
+    return;
+  }
+
+  const settings = state.netsuiteSettings || {
+    serviceBaseUrl: "",
+    clientId: "",
+    certificateId: "",
+    jwtAlgorithm: "PS256",
+    probeQuery: "SELECT id FROM Account",
+    hasPrivateKey: false,
+    lastTest: null,
+    lastCatalogExport: null,
+    masterKeyConfigured: false,
+    availabilityError: "NetSuite settings are unavailable.",
+    maskedClientId: null,
+    maskedCertificateId: null
+  };
+
+  if (document.activeElement !== netsuiteServiceBaseUrlInput && !state.netsuiteSaving) {
+    netsuiteServiceBaseUrlInput.value = settings.serviceBaseUrl || "";
+  }
+  if (document.activeElement !== netsuiteClientIdInput && !state.netsuiteSaving) {
+    netsuiteClientIdInput.value = settings.clientId || "";
+  }
+  if (document.activeElement !== netsuiteCertificateIdInput && !state.netsuiteSaving) {
+    netsuiteCertificateIdInput.value = settings.certificateId || "";
+  }
+  if (document.activeElement !== netsuiteJwtAlgorithmInput && !state.netsuiteSaving) {
+    netsuiteJwtAlgorithmInput.value = settings.jwtAlgorithm || "PS256";
+  }
+  if (document.activeElement !== netsuiteProbeQueryInput && !state.netsuiteSaving) {
+    netsuiteProbeQueryInput.value = settings.probeQuery || "SELECT id FROM Account";
+  }
+  if (!state.netsuiteSaving && !state.netsuiteTesting) {
+    netsuitePrivateKeyInput.value = "";
+  }
+
+  const keySummary = [];
+  if (settings.hasPrivateKey) {
+    keySummary.push("An encrypted private key is saved on the server.");
+  } else {
+    keySummary.push("No private key is saved yet.");
+  }
+  if (settings.maskedClientId) {
+    keySummary.push(`Client ID ${settings.maskedClientId}.`);
+  }
+  if (settings.maskedCertificateId) {
+    keySummary.push(`Certificate ID ${settings.maskedCertificateId}.`);
+  }
+  if (!settings.masterKeyConfigured && settings.availabilityError) {
+    netsuiteKeyStatus.textContent = settings.availabilityError;
+    netsuiteKeyStatus.className = "form-status error";
+  } else {
+    netsuiteKeyStatus.textContent = keySummary.join(" ");
+    netsuiteKeyStatus.className = `form-status ${settings.hasPrivateKey ? "success" : "empty"}`;
+  }
+
+  netsuiteSettingsStatus.textContent = state.netsuiteStatus;
+  netsuiteSettingsStatus.className = `form-status ${state.netsuiteTone}`;
+  renderNetSuiteLastTest(settings.lastTest);
+  renderNetSuiteCatalogExport(settings.lastCatalogExport);
+  syncNetSuiteFormControls();
+}
+
+function renderNetSuiteLastTest(lastTest) {
+  if (!netsuiteLastTest) {
+    return;
+  }
+
+  if (!lastTest) {
+    netsuiteLastTest.textContent = "No NetSuite proof-of-life checks have been recorded yet.";
+    netsuiteLastTest.className = "form-status empty";
+    return;
+  }
+
+  const summary = [
+    `Checked ${formatDateTime(lastTest.checkedAt)}`,
+    `Duration ${escapeHtml(String(lastTest.durationMs || 0))} ms`
+  ];
+  if (lastTest.httpStatus) {
+    summary.push(`HTTP ${escapeHtml(String(lastTest.httpStatus))}`);
+  }
+  if (typeof lastTest.count === "number") {
+    summary.push(`Count ${escapeHtml(String(lastTest.count))}`);
+  }
+  if (typeof lastTest.totalResults === "number") {
+    summary.push(`Total ${escapeHtml(String(lastTest.totalResults))}`);
+  }
+
+  const detailRows = [];
+  if (Array.isArray(lastTest.columnNames) && lastTest.columnNames.length > 0) {
+    detailRows.push(`<span>Columns: ${escapeHtml(lastTest.columnNames.join(", "))}</span>`);
+  }
+  if (lastTest.errorCode) {
+    detailRows.push(`<span>Error code: ${escapeHtml(lastTest.errorCode)}</span>`);
+  }
+  if (lastTest.errorMessage) {
+    detailRows.push(`<span>${escapeHtml(lastTest.errorMessage)}</span>`);
+  }
+
+  netsuiteLastTest.className = `form-status ${lastTest.status === "success" ? "success" : "error"}`;
+  netsuiteLastTest.innerHTML = `
+    <strong>${lastTest.status === "success" ? "NetSuite connection is live." : "NetSuite connection test failed."}</strong>
+    <div class="attachment-meta">
+      ${summary.map((item) => `<span>${item}</span>`).join("")}
+      ${detailRows.join("")}
+    </div>
+  `;
+}
+
+function renderNetSuiteCatalogExport(lastCatalogExport) {
+  if (!netsuiteLastCatalogExport || !netsuiteCatalogDownloadLink) {
+    return;
+  }
+
+  if (!lastCatalogExport) {
+    netsuiteLastCatalogExport.textContent = "No NetSuite metadata catalog exports have been recorded yet.";
+    netsuiteLastCatalogExport.className = "form-status empty";
+    netsuiteCatalogDownloadLink.hidden = true;
+    netsuiteCatalogDownloadLink.download = "";
+    return;
+  }
+
+  const summary = [
+    `Checked ${formatDateTime(lastCatalogExport.checkedAt)}`,
+    `Duration ${escapeHtml(String(lastCatalogExport.durationMs || 0))} ms`
+  ];
+  if (lastCatalogExport.httpStatus) {
+    summary.push(`HTTP ${escapeHtml(String(lastCatalogExport.httpStatus))}`);
+  }
+  if (typeof lastCatalogExport.rowCount === "number") {
+    summary.push(`Rows ${escapeHtml(String(lastCatalogExport.rowCount))}`);
+  }
+  if (typeof lastCatalogExport.schemaFileCount === "number") {
+    summary.push(`Schemas ${escapeHtml(String(lastCatalogExport.schemaFileCount))}`);
+  }
+
+  const detailRows = [];
+  if (lastCatalogExport.fileName) {
+    detailRows.push(`<span>Latest CSV: ${escapeHtml(lastCatalogExport.fileName)}</span>`);
+  }
+  if (lastCatalogExport.schemaDirectory) {
+    detailRows.push(`<span>Schema directory: ${escapeHtml(lastCatalogExport.schemaDirectory)}</span>`);
+  }
+  if (lastCatalogExport.errorCode) {
+    detailRows.push(`<span>Error code: ${escapeHtml(lastCatalogExport.errorCode)}</span>`);
+  }
+  if (lastCatalogExport.errorMessage) {
+    detailRows.push(`<span>${escapeHtml(lastCatalogExport.errorMessage)}</span>`);
+  }
+
+  netsuiteLastCatalogExport.className = `form-status ${lastCatalogExport.status === "success" ? "success" : "error"}`;
+  netsuiteLastCatalogExport.innerHTML = `
+    <strong>${lastCatalogExport.status === "success" ? "NetSuite metadata catalog export is ready." : "NetSuite metadata catalog export failed."}</strong>
+    <div class="attachment-meta">
+      ${summary.map((item) => `<span>${item}</span>`).join("")}
+      ${detailRows.join("")}
+    </div>
+  `;
+
+  const hasDownload = Boolean(lastCatalogExport.fileName);
+  netsuiteCatalogDownloadLink.hidden = !hasDownload;
+  netsuiteCatalogDownloadLink.download = hasDownload ? lastCatalogExport.fileName : "";
+}
+
+async function saveNetSuiteSettings(clearPrivateKey) {
+  if (!isAdmin() || !netsuiteSettingsAvailable) {
+    return;
+  }
+
+  state.netsuiteSaving = true;
+  syncNetSuiteFormControls();
+  setNetSuiteStatus(clearPrivateKey ? "Clearing saved NetSuite private key..." : "Saving NetSuite connector settings...", "empty");
+
+  try {
+    const result = await fetchJson("/api/settings/netsuite", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        serviceBaseUrl: netsuiteServiceBaseUrlInput.value.trim(),
+        clientId: netsuiteClientIdInput.value.trim(),
+        certificateId: netsuiteCertificateIdInput.value.trim(),
+        jwtAlgorithm: netsuiteJwtAlgorithmInput.value,
+        probeQuery: netsuiteProbeQueryInput.value.trim(),
+        privateKeyPem: clearPrivateKey ? "" : netsuitePrivateKeyInput.value,
+        clearPrivateKey
+      })
+    });
+
+    state.netsuiteSettings = result;
+    netsuitePrivateKeyInput.value = "";
+    setNetSuiteStatus(
+      clearPrivateKey
+        ? "Saved NetSuite settings and cleared the encrypted private key."
+        : "NetSuite connector settings saved.",
+      "success"
+    );
+    renderNetSuiteSettings();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuiteStatus(message, "error");
+  } finally {
+    state.netsuiteSaving = false;
+    syncNetSuiteFormControls();
+  }
+}
+
+async function testNetSuiteConnection() {
+  if (!isAdmin() || !netsuiteSettingsAvailable) {
+    return;
+  }
+
+  state.netsuiteTesting = true;
+  syncNetSuiteFormControls();
+  setNetSuiteStatus("Running the NetSuite proof-of-life query...", "empty");
+
+  try {
+    const result = await fetchJson("/api/settings/netsuite/test", {
+      method: "POST"
+    });
+    if (state.netsuiteSettings) {
+      state.netsuiteSettings.lastTest = result.lastTest || null;
+    }
+    renderNetSuiteSettings();
+    setNetSuiteStatus(
+      result.lastTest && result.lastTest.status === "success"
+        ? "NetSuite connection test succeeded."
+        : "NetSuite connection test completed with an error response.",
+      result.lastTest && result.lastTest.status === "success" ? "success" : "error"
+    );
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuiteStatus(message, "error");
+  } finally {
+    state.netsuiteTesting = false;
+    syncNetSuiteFormControls();
+  }
+}
+
+async function exportNetSuiteMetadataCatalog() {
+  if (!isAdmin() || !netsuiteSettingsAvailable) {
+    return;
+  }
+
+  state.netsuiteCatalogExporting = true;
+  syncNetSuiteFormControls();
+  setNetSuiteStatus("Exporting the NetSuite metadata catalog and full record schemas...", "empty");
+
+  try {
+    const result = await fetchJson("/api/settings/netsuite/debug/metadata-catalog/export", {
+      method: "POST"
+    });
+    if (state.netsuiteSettings) {
+      state.netsuiteSettings.lastCatalogExport = result.lastCatalogExport || null;
+    }
+    renderNetSuiteSettings();
+    setNetSuiteStatus(
+      result.lastCatalogExport && result.lastCatalogExport.status === "success"
+        ? "NetSuite metadata catalog export succeeded."
+        : "NetSuite metadata catalog export completed with an error response.",
+      result.lastCatalogExport && result.lastCatalogExport.status === "success" ? "success" : "error"
+    );
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuiteStatus(message, "error");
+  } finally {
+    state.netsuiteCatalogExporting = false;
+    syncNetSuiteFormControls();
+  }
+}
+
+async function saveApprovedSenders() {
+  if (!isAdmin() || !approvedSendersInput) {
+    return;
+  }
+
+  const patterns = approvedSendersInput.value
+    .split(/\n/g)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  state.approvedSenderSaving = true;
+  syncApprovedSenderFormControls();
+  setApprovedSenderStatus("Saving sender allowlist...", "empty");
+
+  try {
+    const result = await fetchJson("/api/settings/approved-senders", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ patterns })
+    });
+
+    state.approvedSenderPatterns = Array.isArray(result.patterns) ? result.patterns : [];
+    state.approvedSenderSource = "database";
+    approvedSendersInput.value = state.approvedSenderPatterns.join("\n");
+    setApprovedSenderStatus(
+      state.approvedSenderPatterns.length > 0
+        ? `Saved ${state.approvedSenderPatterns.length} approved sender pattern(s).`
+        : "Allowlist is now empty. All senders will be accepted.",
+      "success"
+    );
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setApprovedSenderStatus(message, "error");
+  } finally {
+    state.approvedSenderSaving = false;
+    syncApprovedSenderFormControls();
+  }
+}
+
+async function createViewerUser() {
+  if (!viewerSettingsAvailable || !isAdmin()) {
+    return;
+  }
+
+  const username = viewerUsernameInput.value.trim();
+  const password = viewerPasswordInput.value;
+
+  state.viewerSaving = true;
+  syncViewerFormControls();
+  setViewerFormStatus("Creating viewer account...", "empty");
+
+  try {
+    await fetchJson("/api/users", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    viewerUserForm.reset();
+    setViewerFormStatus(`Viewer ${username} created.`, "success");
+    await refreshDashboard(`Viewer ${username} created.`);
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setViewerFormStatus(message, "error");
+  } finally {
+    state.viewerSaving = false;
+    syncViewerFormControls();
+  }
+}
+
+async function changeUserPassword(userId, password) {
+  if (!isAdmin() || state.userPasswordSavingId === userId) {
+    return;
+  }
+
+  const targetUser = Array.isArray(state.users)
+    ? state.users.find((user) => Number(user.id) === userId) ?? null
+    : null;
+  const username = targetUser && targetUser.username ? targetUser.username : `user ${userId}`;
+
+  state.userPasswordSavingId = userId;
+  setViewerFormStatus(`Updating password for ${username}...`, "empty");
+  renderSettings();
+
+  try {
+    await fetchJson(`/api/users/${encodeURIComponent(String(userId))}/password`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ password })
+    });
+
+    setViewerFormStatus(`Password updated for ${username}.`, "success");
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setViewerFormStatus(message, "error");
+  } finally {
+    state.userPasswordSavingId = null;
+    renderSettings();
+  }
+}
+
+async function deleteViewerUser(userId) {
+  if (!isAdmin() || state.viewerDeletingUserId === userId) {
+    return;
+  }
+
+  state.viewerDeletingUserId = userId;
+  renderSettings();
+
+  try {
+    await fetchJson(`/api/users/${encodeURIComponent(String(userId))}`, {
+      method: "DELETE"
+    });
+
+    setViewerFormStatus("Viewer removed.", "success");
+    await refreshDashboard("Viewer removed.");
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setViewerFormStatus(message, "error");
+  } finally {
+    state.viewerDeletingUserId = null;
+    renderSettings();
+  }
+}
+
+function syncCurrentPageFromHash() {
+  const hashPage = normalizePage(window.location.hash.replace(/^#/, ""));
+  setCurrentPage(hashPage, { replaceHash: !window.location.hash });
+}
+
+function setCurrentPage(page, options = {}) {
+  const nextPage = normalizePage(page);
+  state.currentPage = nextPage;
+
+  const targetHash = `#${nextPage}`;
+  if (options.updateHash && window.location.hash !== targetHash) {
+    window.location.hash = targetHash;
+  } else if (options.replaceHash && window.location.hash !== targetHash) {
+    window.history.replaceState(null, "", targetHash);
+  }
+
+  renderNavigation();
+}
+
+function normalizePage(page) {
+  if (page === "latest-run") {
+    return "overview";
+  }
+
+  return PAGE_IDS.includes(page) ? page : "overview";
+}
+
+function isAdmin() {
+  return Boolean(state.currentUser && state.currentUser.role === "admin");
+}
+
+function isPageAllowed(page) {
+  if (page === "settings" || page === "netsuite") {
+    return isAdmin();
+  }
+
+  return true;
+}
+
 function renderError(error) {
   const message = error && error.message ? error.message : String(error);
-  heroStatus.textContent = `Request failed: ${message}`;
+  if (heroStatus) {
+    heroStatus.textContent = `Request failed: ${message}`;
+  }
 }
 
 async function fetchJson(url, options) {
