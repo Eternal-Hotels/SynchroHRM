@@ -656,13 +656,29 @@ button.secondary,
 .netsuite-page-layout {
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
   align-items: start;
 }
 
 .netsuite-property-rail {
-  position: sticky;
-  top: 18px;
+  gap: 14px;
+}
+
+#netsuite-property-list {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scroll-snap-type: x proximity;
+}
+
+#netsuite-property-list > .attachment-card,
+#netsuite-property-list > .empty {
+  flex: 0 0 min(320px, calc(100vw - 108px));
+  scroll-snap-align: start;
+}
+
+#netsuite-property-list > .attachment-card {
+  min-height: 100%;
 }
 
 .netsuite-workspace {
@@ -1065,13 +1081,6 @@ code {
     position: static;
   }
 
-  .netsuite-page-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .netsuite-property-rail {
-    position: static;
-  }
 }
 
 @media (max-width: 720px) {
@@ -1128,6 +1137,18 @@ code {
 
   .report-browser {
     grid-template-columns: 1fr;
+  }
+
+  #netsuite-property-list {
+    display: grid;
+    overflow-x: visible;
+    padding-bottom: 0;
+    scroll-snap-type: none;
+  }
+
+  #netsuite-property-list > .attachment-card,
+  #netsuite-property-list > .empty {
+    flex-basis: auto;
   }
 
   .stat-grid,
