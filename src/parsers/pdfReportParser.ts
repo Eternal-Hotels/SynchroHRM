@@ -3653,7 +3653,7 @@ function parseTrialBalanceReport(document: PdfDocumentText): Array<Record<string
   return blocks.map((block) => ({
     row_kind: /^(?:Total|Grand Total)\b/.test(block[0]?.text ?? "") ? "total" : "detail",
     account_type: firstNonEmptySlice(block, 34, 80),
-    account_name: joinSlices(block, 80, 176),
+    account_name: joinWrappedSlices(block, 80, 176),
     transaction_code: firstNonEmptySlice(block, 176, 214),
     opening_balance: normalizeCurrencyAmount(joinCompactSlices(block, 232, 298)),
     debit_amount: normalizeCurrencyAmount(joinCompactSlices(block, 314, 352)),
@@ -3722,48 +3722,68 @@ function parseBookedReservations(document: PdfDocumentText): Array<Record<string
 function parseDirectBillAging(document: PdfDocumentText): Array<Record<string, string | null>> {
   const rows: Array<Record<string, string | null>> = [];
   let section: string | null = null;
-  let pendingCompany: string[] = [];
+  let currentBlock: PdfLine[] = [];
+  let leadingLines: PdfLine[] = [];
+  const usesExtendedBuckets = document.lines.some((line) => line.text.includes("Over7") && line.text.includes("Over14"));
+  const slices = usesExtendedBuckets ? DIRECT_BILL_AGING_EXTENDED_SLICES : DIRECT_BILL_AGING_LEGACY_SLICES;
+
+  const flushCurrentBlock = (): void => {
+    if (currentBlock.length === 0) {
+      return;
+    }
+
+    rows.push({
+      section,
+      company_name: joinWrappedSlices(currentBlock, 24, 100),
+      company_code: firstNonEmptySlice(currentBlock, 100, 164),
+      current_amount: normalizeAmount(joinCompactSlices(currentBlock, slices.current[0], slices.current[1])),
+      over_30_amount: normalizeAmount(joinCompactSlices(currentBlock, slices.over30[0], slices.over30[1])),
+      over_60_amount: normalizeAmount(joinCompactSlices(currentBlock, slices.over60[0], slices.over60[1])),
+      over_90_amount: normalizeAmount(joinCompactSlices(currentBlock, slices.over90[0], slices.over90[1])),
+      over_120_amount: normalizeAmount(joinCompactSlices(currentBlock, slices.over120[0], slices.over120[1])),
+      over_150_amount: normalizeAmount(joinCompactSlices(currentBlock, slices.over150[0], slices.over150[1])),
+      total_amount: normalizeAmount(joinCompactSlices(currentBlock, slices.total[0], slices.total[1]))
+    });
+    currentBlock = [];
+  };
 
   for (const line of document.lines) {
     const text = line.text;
     if (!text || shouldSkipCommonLine(text)) {
       continue;
     }
-    if (text === "Direct Bill Aging" || text === "Accounts Receivables" || text === "Invoices" || text === "Settlements" || text === "Totals") {
+    if (text === "Direct Bill Aging") {
+      continue;
+    }
+    if (text === "Accounts Receivables" || text === "Invoices" || text === "Settlements") {
+      flushCurrentBlock();
       section = text;
-      pendingCompany = [];
+      leadingLines = [];
       continue;
     }
-    if (text.startsWith("Company Name Company Code") || text.startsWith("Current Over7 Over14")) {
-      continue;
-    }
-
-    const currentAmount = normalizeAmount(sliceText(line, 220, 260));
-    const totalAmount = normalizeAmount(sliceText(line, 756, 798));
-    if (currentAmount || totalAmount) {
-      const inlineCompany = normalizeText(sliceText(line, 24, 104));
-      rows.push({
-        section,
-        company_name: inlineCompany || (pendingCompany.length > 0 ? pendingCompany.join(" ") : (text.startsWith("Totals") ? "Totals" : null)),
-        company_code: normalizeText(sliceText(line, 128, 182)),
-        current_amount: currentAmount,
-        over_30_amount: normalizeAmount(sliceText(line, 315, 348)),
-        over_60_amount: normalizeAmount(sliceText(line, 404, 437)),
-        over_90_amount: normalizeAmount(sliceText(line, 493, 526)),
-        over_120_amount: normalizeAmount(sliceText(line, 584, 612)),
-        over_150_amount: normalizeAmount(sliceText(line, 675, 701)),
-        total_amount: totalAmount
-      });
-      pendingCompany = [];
+    if (text.startsWith("Company Name Company Code") || text.startsWith("Current Over")) {
       continue;
     }
 
-    const companyFragment = normalizeText(sliceText(line, 24, 104));
+    if (hasAnyNormalizedSlice(line, DIRECT_BILL_AGING_DATA_SLICES, normalizeAmount)) {
+      flushCurrentBlock();
+      currentBlock = [...leadingLines, line];
+      leadingLines = [];
+      continue;
+    }
+
+    if (currentBlock.length > 0) {
+      currentBlock.push(line);
+      continue;
+    }
+
+    const companyFragment = normalizeText(sliceText(line, 24, 100));
     if (companyFragment && !isDirectBillAgingHeader(companyFragment)) {
-      pendingCompany.push(companyFragment);
+      leadingLines.push(line);
     }
   }
 
+  flushCurrentBlock();
   return rows;
 }
 
@@ -3803,36 +3823,24 @@ function parseDirectBillLedger(document: PdfDocumentText): Array<Record<string, 
 function parseFinalAudit(document: PdfDocumentText): Array<Record<string, string | null>> {
   const rows: Array<Record<string, string | null>> = [];
   let section: string | null = null;
-  let pendingLabel: string[] = [];
+  let currentBlock: PdfLine[] = [];
+  let leadingLines: PdfLine[] = [];
   let unlabeledCount = 0;
 
-  for (const line of document.lines) {
-    const text = line.text;
-    if (!text || shouldSkipCommonLine(text) || isFinalAuditHeader(text)) {
-      continue;
+  const flushCurrentBlock = (): void => {
+    if (currentBlock.length === 0) {
+      return;
     }
 
-    const sectionFromHeader = getFinalAuditSectionHeader(text);
-    if (sectionFromHeader) {
-      section = sectionFromHeader;
-      pendingLabel = [];
-      unlabeledCount = 0;
-      continue;
+    const values = FINAL_AUDIT_VALUE_SLICES
+      .slice(0, getFinalAuditValueLimit(section))
+      .map(([minX, maxX]) => normalizeCurrencyAmount(joinCompactSlices(currentBlock, minX, maxX)));
+    if (!values.some(Boolean)) {
+      currentBlock = [];
+      return;
     }
 
-    const valueLimit = getFinalAuditValueLimit(section);
-    const metric = extractMetricLine(text, valueLimit);
-    if (!metric) {
-      pendingLabel.push(text);
-      continue;
-    }
-
-    const labelPieces = metric.label ? [metric.label] : [];
-    if (pendingLabel.length > 0) {
-      labelPieces.unshift(...pendingLabel);
-    }
-    pendingLabel = [];
-    let metricName = normalizeText(labelPieces.join(" "));
+    let metricName = joinWrappedSlices(currentBlock, 20, 110);
     if (!metricName) {
       unlabeledCount += 1;
       metricName = `Row ${unlabeledCount}`;
@@ -3841,19 +3849,57 @@ function parseFinalAudit(document: PdfDocumentText): Array<Record<string, string
     rows.push({
       section,
       metric_name: metricName,
-      value_1: metric.values[0] ?? null,
-      value_2: metric.values[1] ?? null,
-      value_3: metric.values[2] ?? null,
-      value_4: metric.values[3] ?? null,
-      value_5: metric.values[4] ?? null,
-      value_6: metric.values[5] ?? null,
-      value_7: metric.values[6] ?? null,
-      value_8: metric.values[7] ?? null,
-      value_9: metric.values[8] ?? null,
-      value_10: metric.values[9] ?? null
+      value_1: values[0] ?? null,
+      value_2: values[1] ?? null,
+      value_3: values[2] ?? null,
+      value_4: values[3] ?? null,
+      value_5: values[4] ?? null,
+      value_6: values[5] ?? null,
+      value_7: values[6] ?? null,
+      value_8: values[7] ?? null,
+      value_9: values[8] ?? null,
+      value_10: values[9] ?? null
     });
+    currentBlock = [];
+  };
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (!text || shouldSkipCommonLine(text)) {
+      continue;
+    }
+
+    const sectionFromHeader = getFinalAuditSectionHeader(text);
+    if (sectionFromHeader) {
+      flushCurrentBlock();
+      section = sectionFromHeader;
+      leadingLines = [];
+      unlabeledCount = 0;
+      continue;
+    }
+
+    if (isFinalAuditHeader(text)) {
+      continue;
+    }
+
+    if (hasAnyNormalizedSlice(line, FINAL_AUDIT_VALUE_SLICES.slice(0, getFinalAuditValueLimit(section)), normalizeCurrencyAmount)) {
+      flushCurrentBlock();
+      currentBlock = [...leadingLines, line];
+      leadingLines = [];
+      continue;
+    }
+
+    if (currentBlock.length > 0) {
+      currentBlock.push(line);
+      continue;
+    }
+
+    if (section) {
+      leadingLines.push(line);
+    }
   }
 
+  flushCurrentBlock();
   return rows;
 }
 
@@ -3891,34 +3937,22 @@ function parseHighBalanceReport(document: PdfDocumentText): Array<Record<string,
 function parseHotelStatistics(document: PdfDocumentText): Array<Record<string, string | null>> {
   const rows: Array<Record<string, string | null>> = [];
   let section: string | null = null;
-  let pendingLabel: string[] = [];
+  let currentBlock: PdfLine[] = [];
+  let leadingLines: PdfLine[] = [];
   let unlabeledCount = 0;
 
-  for (const line of document.lines) {
-    const text = line.text;
-    if (!text || shouldSkipCommonLine(text) || isHotelStatisticsHeader(text)) {
-      continue;
+  const flushCurrentBlock = (): void => {
+    if (currentBlock.length === 0) {
+      return;
     }
 
-    if (HOTEL_STATISTICS_SECTIONS.has(text)) {
-      section = text;
-      pendingLabel = [];
-      unlabeledCount = 0;
-      continue;
+    const values = HOTEL_STATISTICS_VALUE_SLICES.map(([minX, maxX]) => normalizeAmount(joinCompactSlices(currentBlock, minX, maxX)));
+    if (!values.some(Boolean)) {
+      currentBlock = [];
+      return;
     }
 
-    const metric = extractMetricLine(text, 5);
-    if (!metric) {
-      pendingLabel.push(text);
-      continue;
-    }
-
-    const labelPieces = metric.label ? [metric.label] : [];
-    if (pendingLabel.length > 0) {
-      labelPieces.unshift(...pendingLabel);
-    }
-    pendingLabel = [];
-    let metricName = normalizeText(labelPieces.join(" "));
+    let metricName = joinWrappedSlices(currentBlock, 24, 132);
     if (!metricName) {
       unlabeledCount += 1;
       metricName = `Row ${unlabeledCount}`;
@@ -3927,14 +3961,52 @@ function parseHotelStatistics(document: PdfDocumentText): Array<Record<string, s
     rows.push({
       section,
       metric_name: metricName,
-      value_1: metric.values[0] ?? null,
-      value_2: metric.values[1] ?? null,
-      value_3: metric.values[2] ?? null,
-      value_4: metric.values[3] ?? null,
-      value_5: metric.values[4] ?? null
+      value_1: values[0] ?? null,
+      value_2: values[1] ?? null,
+      value_3: values[2] ?? null,
+      value_4: values[3] ?? null,
+      value_5: values[4] ?? null
     });
+    currentBlock = [];
+  };
+
+  for (const line of document.lines) {
+    const text = line.text;
+    if (!text || shouldSkipCommonLine(text)) {
+      continue;
+    }
+
+    const sectionHeader = getHotelStatisticsSectionHeader(text);
+    if (sectionHeader) {
+      flushCurrentBlock();
+      section = sectionHeader;
+      leadingLines = [];
+      unlabeledCount = 0;
+      continue;
+    }
+
+    if (isHotelStatisticsHeader(text)) {
+      continue;
+    }
+
+    if (hasAnyNormalizedSlice(line, HOTEL_STATISTICS_VALUE_SLICES, normalizeAmount)) {
+      flushCurrentBlock();
+      currentBlock = [...leadingLines, line];
+      leadingLines = [];
+      continue;
+    }
+
+    if (currentBlock.length > 0) {
+      currentBlock.push(line);
+      continue;
+    }
+
+    if (section) {
+      leadingLines.push(line);
+    }
   }
 
+  flushCurrentBlock();
   return rows;
 }
 
@@ -4056,6 +4128,12 @@ function parseTaxReport(document: PdfDocumentText): Array<Record<string, string 
     if (detailBuffer.length === 0) {
       return;
     }
+    const transactionNumber = firstNonEmptySlice(detailBuffer, 24, 72);
+    if (!transactionNumber) {
+      detailBuffer = [];
+      return;
+    }
+    const isExemptedDetail = section === "Exempted Tax Details";
     rows.push({
       section,
       tax_name: null,
@@ -4064,16 +4142,16 @@ function parseTaxReport(document: PdfDocumentText): Array<Record<string, string 
       taxable_payable: null,
       payable_tax: null,
       exempted_tax: null,
-      transaction_number: firstNonEmptySlice(detailBuffer, 40, 80),
-      folio_number: firstNonEmptySlice(detailBuffer, 122, 156),
-      transaction_type: joinSlices(detailBuffer, 190, 244),
-      room_number: firstNonEmptySlice(detailBuffer, 290, 312),
-      guest_name: joinSlices(detailBuffer, 344, 418),
-      company_name: joinSlices(detailBuffer, 424, 498),
-      check_in_date: parseShortDate(firstNonEmptySlice(detailBuffer, 598, 642)),
-      check_out_date: parseShortDate(firstNonEmptySlice(detailBuffer, 678, 724)),
-      exemption_category: joinSlices(detailBuffer, 516, 570),
-      revenue: normalizeAmount(firstNonEmptySlice(detailBuffer, 764, 800))
+      transaction_number: transactionNumber,
+      folio_number: firstNonEmptySlice(detailBuffer, 80, 122),
+      transaction_type: joinWrappedSlices(detailBuffer, 126, 188),
+      room_number: firstNonEmptySlice(detailBuffer, 190, 224),
+      guest_name: joinWrappedSlices(detailBuffer, 236, 292),
+      company_name: joinWrappedSlices(detailBuffer, 292, 344),
+      check_in_date: parseShortDate(firstNonEmptySlice(detailBuffer, isExemptedDetail ? 650 : 600, isExemptedDetail ? 710 : 660)),
+      check_out_date: parseShortDate(firstNonEmptySlice(detailBuffer, isExemptedDetail ? 710 : 660, isExemptedDetail ? 760 : 714)),
+      exemption_category: isExemptedDetail ? joinWrappedSlices(detailBuffer, 610, 662) : null,
+      revenue: normalizeAmount(joinCompactSlices(detailBuffer, isExemptedDetail ? 760 : 714, isExemptedDetail ? 820 : 770))
     });
     detailBuffer = [];
   };
@@ -4099,17 +4177,17 @@ function parseTaxReport(document: PdfDocumentText): Array<Record<string, string 
     }
 
     if (section === "Summary") {
-      const payableTax = normalizeAmount(sliceText(line, 600, 642));
-      const exemptedTax = normalizeAmount(sliceText(line, 740, 768));
+      const payableTax = normalizeAmount(sliceText(line, 600, 648));
+      const exemptedTax = normalizeAmount(sliceText(line, 736, 780));
       if (!payableTax && !exemptedTax) {
         continue;
       }
       rows.push({
         section,
-        tax_name: normalizeText(sliceText(line, 50, 122)) || (text.startsWith("Totals") ? "Totals" : null),
-        total_revenue: normalizeAmount(sliceText(line, 198, 242)),
-        exempted_revenue: normalizeAmount(sliceText(line, 334, 372)),
-        taxable_payable: normalizeAmount(sliceText(line, 464, 510)),
+        tax_name: normalizeText(sliceText(line, 40, 190)) || (text.startsWith("Totals") ? "Totals" : null),
+        total_revenue: normalizeAmount(sliceText(line, 192, 260)),
+        exempted_revenue: normalizeAmount(sliceText(line, 326, 394)),
+        taxable_payable: normalizeAmount(sliceText(line, 452, 528)),
         payable_tax: payableTax,
         exempted_tax: exemptedTax,
         transaction_number: null,
@@ -4126,7 +4204,12 @@ function parseTaxReport(document: PdfDocumentText): Array<Record<string, string 
       continue;
     }
 
-    const transactionNumber = firstNonEmptySlice([line], 40, 80);
+    if (/^Totals\b/.test(text)) {
+      flushDetailBuffer();
+      continue;
+    }
+
+    const transactionNumber = firstNonEmptySlice([line], 24, 72);
     const detailStart = /^\d+$/.test(transactionNumber ?? "");
     if (detailStart) {
       flushDetailBuffer();
@@ -4145,6 +4228,7 @@ function parseTaxReport(document: PdfDocumentText): Array<Record<string, string 
 const HOTEL_STATISTICS_SECTIONS = new Set([
   "Room Statistics",
   "Performance Statistics",
+  "Revenue Statistics",
   "Revenue Performance",
   "Taxes",
   "Payments",
@@ -4154,6 +4238,59 @@ const HOTEL_STATISTICS_SECTIONS = new Set([
   "Forecast Guest Statistics",
   "Forecast Performance Statistics"
 ]);
+
+const DIRECT_BILL_AGING_DATA_SLICES = [
+  [170, 236],
+  [248, 306],
+  [320, 380],
+  [392, 452],
+  [466, 524],
+  [540, 596],
+  [614, 668],
+  [684, 742],
+  [756, 816]
+] as const satisfies ReadonlyArray<readonly [number, number]>;
+
+const DIRECT_BILL_AGING_LEGACY_SLICES = {
+  current: [220, 260],
+  over30: [315, 348],
+  over60: [404, 437],
+  over90: [493, 526],
+  over120: [584, 612],
+  over150: [675, 701],
+  total: [756, 798]
+} as const;
+
+const DIRECT_BILL_AGING_EXTENDED_SLICES = {
+  current: [170, 236],
+  over30: [392, 452],
+  over60: [466, 524],
+  over90: [540, 596],
+  over120: [614, 668],
+  over150: [684, 742],
+  total: [756, 816]
+} as const;
+
+const FINAL_AUDIT_VALUE_SLICES = [
+  [160, 220],
+  [226, 286],
+  [292, 352],
+  [358, 418],
+  [424, 490],
+  [496, 558],
+  [560, 624],
+  [628, 694],
+  [698, 756],
+  [760, 824]
+] as const satisfies ReadonlyArray<readonly [number, number]>;
+
+const HOTEL_STATISTICS_VALUE_SLICES = [
+  [132, 188],
+  [224, 280],
+  [318, 374],
+  [410, 468],
+  [502, 560]
+] as const satisfies ReadonlyArray<readonly [number, number]>;
 
 function filterDataLines(document: PdfDocumentText, extraSkips: Set<string>): PdfLine[] {
   return document.lines.filter((line) => {
@@ -4221,8 +4358,20 @@ function joinSlices(lines: PdfLine[], minX: number, maxX: number): string | null
   return normalizeText(parts.join(" "));
 }
 
+function joinWrappedSlices(lines: PdfLine[], minX: number, maxX: number): string | null {
+  return joinWrappedText(lines.map((line) => sliceText(line, minX, maxX)));
+}
+
 function joinCompactSlices(lines: PdfLine[], minX: number, maxX: number): string | null {
   return joinCompactText(lines.map((line) => sliceText(line, minX, maxX)));
+}
+
+function hasAnyNormalizedSlice(
+  line: PdfLine,
+  slices: ReadonlyArray<readonly [number, number]>,
+  normalizer: (value: string | null | undefined) => string | null
+): boolean {
+  return slices.some(([minX, maxX]) => Boolean(normalizer(sliceText(line, minX, maxX))));
 }
 
 function isNamedDateTimeLine(text: string): boolean {
@@ -4362,6 +4511,19 @@ function isDirectBillAgingHeader(text: string): boolean {
     || text.startsWith("Over ");
 }
 
+function getHotelStatisticsSectionHeader(text: string): string | null {
+  if (HOTEL_STATISTICS_SECTIONS.has(text)) {
+    return text;
+  }
+
+  if (text.startsWith("Description Actual Today")) {
+    return null;
+  }
+
+  const groupedHeader = text.match(/^(.*?)\s+Actual Today\b/);
+  return normalizeText(groupedHeader?.[1] ?? null);
+}
+
 function getFinalAuditSectionHeader(text: string): string | null {
   if (text === "Room Revenue" || text === "Other Room Revenue" || text === "Charges" || text === "Revenue & Charges" || text === "Taxes" || text === "Balance Information" || text === "Turn Away Information" || text === "Cash Deposit And Cash Drop" || text === "Statistical Counts") {
     return text;
@@ -4403,15 +4565,8 @@ function getFinalAuditValueLimit(section: string | null): number {
 function isFinalAuditHeader(text: string): boolean {
   return text === "Adjusted"
     || text === "Transferred"
-    || text.startsWith("Charge Type Actual Today")
-    || text.startsWith("Cash Actual Today")
-    || text.startsWith("Card Actual Today")
-    || text.startsWith("Other Actual Today")
-    || text.startsWith("DIRECT BILL Actual Today")
-    || text.startsWith("Tax Type Actual Today")
-    || text.startsWith("Actual Today Adjusted Net Today")
-    || text.startsWith("Type Actual Today Adjusted Net Today")
-    || text.startsWith("Type Actual Today M-T-D");
+    || text === "Name Code Transferred"
+    || (/Actual Today/.test(text) && /(Adjusted|M-T-D|LY-M-T-D|Variance)/.test(text));
 }
 
 function isHotelStatisticsHeader(text: string): boolean {
@@ -4544,7 +4699,8 @@ function shouldSkipCommonLine(text: string): boolean {
     || text === "Room Count Summary"
     || text === "Occupancy Forecast"
     || text === "Rate Override"
-    || text === "Tax Report";
+    || text === "Tax Report"
+    || shouldSkipVisibleTitleLine(text);
 }
 
 function isNonPropertyHeader(text: string): boolean {
@@ -4639,4 +4795,62 @@ function joinCompactText(parts: Array<string | null | undefined>): string | null
   }
 
   return normalized.join("");
+}
+
+function joinWrappedText(parts: Array<string | null | undefined>): string | null {
+  const normalized = parts
+    .map((part) => normalizeText(part))
+    .filter((part): part is string => Boolean(part));
+
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  let combined = normalized[0] ?? "";
+  for (const part of normalized.slice(1)) {
+    const tokens = part.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) {
+      continue;
+    }
+
+    const [firstToken, ...remainingTokens] = tokens;
+    if (shouldMergeWrappedBoundaryToken(combined, firstToken, tokens.length)) {
+      combined += firstToken;
+      if (remainingTokens.length > 0) {
+        combined += ` ${remainingTokens.join(" ")}`;
+      }
+      continue;
+    }
+
+    combined += ` ${part}`;
+  }
+
+  return normalizeText(combined);
+}
+
+function shouldMergeWrappedBoundaryToken(existing: string, nextToken: string, partTokenCount: number): boolean {
+  const previousToken = existing.split(/\s+/).filter(Boolean).at(-1) ?? "";
+  if (!previousToken) {
+    return false;
+  }
+
+  if (/\.$/.test(previousToken) && /^\d+$/.test(nextToken)) {
+    return true;
+  }
+
+  if (/[_(/-]$/.test(previousToken) && /^[A-Za-z0-9_()/-]+$/.test(nextToken)) {
+    return true;
+  }
+
+  if (
+    /^[a-z][A-Za-z0-9_()/-]*$/.test(nextToken)
+    && /^[A-Za-z0-9_()/-]{8,}$/.test(previousToken)
+    && /[A-Za-z0-9_)]$/.test(previousToken)
+  ) {
+    return true;
+  }
+
+  return /^[A-Z]{1,3}\)?$/.test(nextToken)
+    && /^[A-Za-z][A-Za-z0-9_()-]{6,}$/.test(previousToken)
+    && (partTokenCount === 1 || nextToken.length === 1);
 }

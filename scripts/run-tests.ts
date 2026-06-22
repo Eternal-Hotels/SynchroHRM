@@ -248,6 +248,141 @@ await run("hampton la grande report bundle parses into supported families", asyn
   }
 });
 
+await run("holiday inn express pendleton gl reports collapse wrapped rows and skip title metadata", async () => {
+  const fixtureDir = path.resolve("storage", "raw", "holiday-inn-express-pendleton", "2026-05-31");
+  if (!(await pathExists(fixtureDir))) {
+    return;
+  }
+
+  const files = await readdir(fixtureDir);
+  const findFixture = (needle: string): string => {
+    const fileName = files.find((name) => name.includes(needle));
+    assert.ok(fileName, `fixture present for ${needle}`);
+    return path.join(fixtureDir, fileName);
+  };
+
+  const finalAudit = await parser.parse(await readFile(findFixture("final-audit")));
+  assert.equal(finalAudit.reportType, "final_audit_metric_rows");
+  assert.ok(!finalAudit.rows.some((row) => String(row.metric_name ?? "").includes("Report run date")));
+  assert.ok(!finalAudit.rows.some((row) => String(row.metric_name ?? "").includes("??? Date")));
+  assert.deepEqual(
+    finalAudit.rows.find((row) => row.metric_name === "ACCOMMODATION"),
+    {
+      ...finalAudit.rows.find((row) => row.metric_name === "ACCOMMODATION"),
+      section: "Room Revenue",
+      metric_name: "ACCOMMODATION",
+      value_5: "185.25",
+      value_8: "403.40"
+    }
+  );
+  assert.deepEqual(
+    finalAudit.rows.find((row) => row.metric_name === "CANCELLATION CHARGE"),
+    {
+      ...finalAudit.rows.find((row) => row.metric_name === "CANCELLATION CHARGE"),
+      section: "Room Revenue",
+      metric_name: "CANCELLATION CHARGE",
+      value_5: "334.08"
+    }
+  );
+
+  const hotelStatistics = await parser.parse(await readFile(findFixture("hotel-statist")));
+  assert.equal(hotelStatistics.reportType, "hotel_statistics_metric_rows");
+  assert.ok(!hotelStatistics.rows.some((row) => String(row.metric_name ?? "").includes("Report run date")));
+  assert.deepEqual(
+    hotelStatistics.rows.find((row) => row.metric_name === "Rooms Available To Sell"),
+    {
+      ...hotelStatistics.rows.find((row) => row.metric_name === "Rooms Available To Sell"),
+      section: "Room Statistics",
+      metric_name: "Rooms Available To Sell",
+      value_1: "61",
+      value_4: "6739"
+    }
+  );
+  assert.deepEqual(
+    hotelStatistics.rows.find((row) => row.metric_name === "IHG ONE REWARDS CLUB REIMBURSEMENT"),
+    {
+      ...hotelStatistics.rows.find((row) => row.metric_name === "IHG ONE REWARDS CLUB REIMBURSEMENT"),
+      section: "Misc Revenue",
+      metric_name: "IHG ONE REWARDS CLUB REIMBURSEMENT",
+      value_4: "125.75"
+    }
+  );
+
+  const directBillAging = await parser.parse(await readFile(findFixture("direct-bill-a")));
+  assert.equal(directBillAging.reportType, "direct_bill_aging_rows");
+  assert.ok(!directBillAging.rows.some((row) => String(row.company_name ?? "").includes("Report run date")));
+  assert.deepEqual(
+    directBillAging.rows.find((row) => row.company_name === "IHG REWARD NIGHT REIMBURSEMENTS"),
+    {
+      ...directBillAging.rows.find((row) => row.company_name === "IHG REWARD NIGHT REIMBURSEMENTS"),
+      section: "Accounts Receivables",
+      company_name: "IHG REWARD NIGHT REIMBURSEMENTS",
+      current_amount: "3531.96",
+      over_30_amount: "3471.64",
+      over_150_amount: "779.31",
+      total_amount: "9166.44"
+    }
+  );
+  assert.deepEqual(
+    directBillAging.rows.find((row) => row.company_name === "OREGON JUDICIAL DEPARTMENT"),
+    {
+      ...directBillAging.rows.find((row) => row.company_name === "OREGON JUDICIAL DEPARTMENT"),
+      section: "Invoices",
+      company_name: "OREGON JUDICIAL DEPARTMENT",
+      over_150_amount: "427.04",
+      total_amount: "427.04"
+    }
+  );
+
+  const taxReport = await parser.parse(await readFile(findFixture("tax-report")));
+  assert.equal(taxReport.reportType, "tax_report_rows");
+  assert.ok(!taxReport.rows.some((row) => String(row.exemption_category ?? "").includes("Report run date")));
+  assert.deepEqual(
+    taxReport.rows.find((row) => row.tax_name === "Tourism Promotional Assessment"),
+    {
+      ...taxReport.rows.find((row) => row.tax_name === "Tourism Promotional Assessment"),
+      section: "Summary",
+      tax_name: "Tourism Promotional Assessment",
+      payable_tax: "160.00",
+      exempted_tax: "40.00"
+    }
+  );
+  assert.deepEqual(
+    taxReport.rows.find((row) => row.transaction_number === "45040314"),
+    {
+      ...taxReport.rows.find((row) => row.transaction_number === "45040314"),
+      section: "Exempted Tax Details",
+      guest_name: "HARRISON CAMERON",
+      exemption_category: "Expedia and Affiliates",
+      revenue: "161.16"
+    }
+  );
+  assert.deepEqual(
+    taxReport.rows.find((row) => row.transaction_number === "45288564"),
+    {
+      ...taxReport.rows.find((row) => row.transaction_number === "45288564"),
+      section: "Non Exempted Tax Details",
+      guest_name: "BENJAMIN SEN ERIC",
+      company_name: "Engine Corp TVL",
+      check_out_date: "2026-06-01",
+      revenue: "170.05"
+    }
+  );
+
+  const trialBalance = await parser.parse(await readFile(findFixture("trial-balance")));
+  assert.equal(trialBalance.reportType, "trial_balance_report_rows");
+  assert.ok(!trialBalance.rows.some((row) => String(row.account_name ?? "").includes("Report run date")));
+  assert.deepEqual(
+    trialBalance.rows.find((row) => row.account_name === "CLC CheckINN T-Chek Cards"),
+    {
+      ...trialBalance.rows.find((row) => row.account_name === "CLC CheckINN T-Chek Cards"),
+      account_type: "ASSET",
+      transaction_code: "CLC"
+    }
+  );
+  assert.ok(trialBalance.rows.some((row) => row.account_name === "reservation_advance_deposit(Offset)"));
+});
+
 await run("holiday inn pendleton standalone operational reports parse as supported", async () => {
   const fixtureDir = path.resolve("storage", "raw", "unassigned-property", "2026-05-20");
   if (!(await pathExists(fixtureDir))) {
