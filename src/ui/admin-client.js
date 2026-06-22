@@ -105,6 +105,7 @@ const netsuiteWorkspaceEmpty = document.getElementById("netsuite-workspace-empty
 const netsuiteWorkspace = document.getElementById("netsuite-workspace");
 const netsuiteWorkspaceSummary = document.getElementById("netsuite-workspace-summary");
 const netsuitePostingForm = document.getElementById("netsuite-posting-form");
+const netsuiteReportTypeSelect = document.getElementById("netsuite-report-type-select");
 const netsuiteAttachmentSelect = document.getElementById("netsuite-attachment-select");
 const netsuitePostingExternalPrefix = document.getElementById("netsuite-posting-external-prefix");
 const netsuitePostingBalancingGl = document.getElementById("netsuite-posting-balancing-gl");
@@ -170,6 +171,7 @@ const netsuitePostingAvailable = Boolean(
   netsuiteWorkspace &&
   netsuiteWorkspaceSummary &&
   netsuitePostingForm &&
+  netsuiteReportTypeSelect &&
   netsuiteAttachmentSelect &&
   netsuitePostingExternalPrefix &&
   netsuitePostingBalancingGl &&
@@ -361,6 +363,18 @@ if (netsuitePropertyList) {
   });
 }
 
+if (netsuiteReportTypeSelect) {
+  netsuiteReportTypeSelect.addEventListener("change", () => {
+    const propertySlug = state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.property
+      ? state.netsuitePostingWorkspace.property.property_slug
+      : "";
+    const reportType = netsuiteReportTypeSelect.value;
+    if (propertySlug && reportType) {
+      void loadNetSuiteWorkspace(propertySlug, null, reportType);
+    }
+  });
+}
+
 if (netsuiteAttachmentSelect) {
   netsuiteAttachmentSelect.addEventListener("change", () => {
     const propertySlug = state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.property
@@ -368,7 +382,11 @@ if (netsuiteAttachmentSelect) {
       : "";
     const attachmentId = Number(netsuiteAttachmentSelect.value);
     if (propertySlug && Number.isInteger(attachmentId) && attachmentId > 0) {
-      void loadNetSuiteWorkspace(propertySlug, attachmentId);
+      void loadNetSuiteWorkspace(
+        propertySlug,
+        attachmentId,
+        netsuiteReportTypeSelect ? netsuiteReportTypeSelect.value : ""
+      );
     }
   });
 }
@@ -386,8 +404,13 @@ if (netsuitePostingRefreshButton) {
       ? state.netsuitePostingWorkspace.property.property_slug
       : "";
     const attachmentId = Number(netsuiteAttachmentSelect && netsuiteAttachmentSelect.value);
+    const reportType = netsuiteReportTypeSelect ? netsuiteReportTypeSelect.value : "";
     if (propertySlug) {
-      void loadNetSuiteWorkspace(propertySlug, Number.isInteger(attachmentId) && attachmentId > 0 ? attachmentId : null);
+      void loadNetSuiteWorkspace(
+        propertySlug,
+        Number.isInteger(attachmentId) && attachmentId > 0 ? attachmentId : null,
+        reportType || null
+      );
     }
   });
 }
@@ -553,9 +576,11 @@ async function refreshDashboard(statusMessage) {
       const selectedAttachmentId = state.netsuitePostingWorkspace.selectedAttachment
         ? Number(state.netsuitePostingWorkspace.selectedAttachment.attachmentId)
         : null;
+      const selectedReportType = getNetSuiteSelectedReportType(state.netsuitePostingWorkspace);
       state.netsuitePostingWorkspace = await fetchNetSuiteWorkspace(
         state.netsuitePostingWorkspace.property.property_slug,
-        Number.isInteger(selectedAttachmentId) && selectedAttachmentId > 0 ? selectedAttachmentId : null
+        Number.isInteger(selectedAttachmentId) && selectedAttachmentId > 0 ? selectedAttachmentId : null,
+        selectedReportType || null
       );
       if (
         !state.netsuitePostingSelectedRunId
@@ -866,6 +891,41 @@ function renderProperties() {
   `).join("");
 }
 
+function getNetSuitePropertyReportTypes(property) {
+  return normalizeNetSuiteReportTypeSummaries(property && property.supportedReportTypes);
+}
+
+function getNetSuiteWorkspaceReportTypes(workspace) {
+  const summaries = normalizeNetSuiteReportTypeSummaries(workspace && workspace.availableReportTypes);
+  if (summaries.length > 0) {
+    return summaries;
+  }
+
+  return normalizeNetSuiteReportTypeSummariesFromAttachments(
+    workspace && Array.isArray(workspace.supportedAttachments) ? workspace.supportedAttachments : []
+  );
+}
+
+function getNetSuiteSelectedReportType(workspace) {
+  if (workspace && typeof workspace.selectedReportType === "string" && workspace.selectedReportType) {
+    return workspace.selectedReportType;
+  }
+
+  return workspace && workspace.selectedAttachment && typeof workspace.selectedAttachment.reportType === "string"
+    ? workspace.selectedAttachment.reportType
+    : "";
+}
+
+function getNetSuiteFilteredAttachments(workspace, reportType) {
+  const attachments = workspace && Array.isArray(workspace.supportedAttachments) ? workspace.supportedAttachments : [];
+  if (!reportType) {
+    return attachments;
+  }
+
+  const filtered = attachments.filter((attachment) => attachment && attachment.reportType === reportType);
+  return filtered.length > 0 ? filtered : attachments;
+}
+
 function renderNetSuitePosting() {
   if (!netsuitePostingAvailable) {
     return;
@@ -898,23 +958,32 @@ function renderNetSuitePosting() {
     const selectedSlug = state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.property
       ? state.netsuitePostingWorkspace.property.property_slug
       : "";
-    netsuitePropertyList.innerHTML = properties.map((property) => `
-      <article class="attachment-card${property.property_slug === selectedSlug ? " is-selected" : ""}">
-        <div class="attachment-top">
-          <div>
-            <strong>${escapeHtml(property.property_name || "Unassigned Property")}</strong>
-            <div class="attachment-meta">
-              <span><code>${escapeHtml(property.property_slug || "unassigned-property")}</code></span>
-              <span>Supported attachments: ${escapeHtml(String(property.attachment_count || 0))}</span>
-              <span>Latest received: ${escapeHtml(formatDateTime(property.last_received_at))}</span>
+    netsuitePropertyList.innerHTML = properties.map((property) => {
+      const supportedReportTypes = getNetSuitePropertyReportTypes(property);
+      const reportTypeSummary = supportedReportTypes
+        .map((entry) => `${entry.reportTitle} (${entry.attachmentCount})`)
+        .join(", ");
+
+      return `
+        <article class="attachment-card${property.property_slug === selectedSlug ? " is-selected" : ""}">
+          <div class="attachment-top">
+            <div>
+              <strong>${escapeHtml(property.property_name || "Unassigned Property")}</strong>
+              <div class="attachment-meta">
+                <span><code>${escapeHtml(property.property_slug || "unassigned-property")}</code></span>
+                <span>Supported attachments: ${escapeHtml(String(property.attachment_count || 0))}</span>
+                <span>Source types: ${escapeHtml(String(supportedReportTypes.length))}</span>
+                <span>Latest received: ${escapeHtml(formatDateTime(property.last_received_at))}</span>
+                ${reportTypeSummary ? `<span>${escapeHtml(reportTypeSummary)}</span>` : ""}
+              </div>
             </div>
           </div>
-        </div>
-        <div class="toolbar-row">
-          <button class="secondary" type="button" data-netsuite-property-slug="${escapeHtml(property.property_slug || "")}">Open Workspace</button>
-        </div>
-      </article>
-    `).join("");
+          <div class="toolbar-row">
+            <button class="secondary" type="button" data-netsuite-property-slug="${escapeHtml(property.property_slug || "")}">Open Workspace</button>
+          </div>
+        </article>
+      `;
+    }).join("");
   }
 
   if (!state.netsuitePostingWorkspace || !state.netsuitePostingWorkspace.property) {
@@ -931,13 +1000,18 @@ function renderNetSuitePosting() {
   const workspace = state.netsuitePostingWorkspace;
   const property = workspace.property;
   const selectedAttachment = workspace.selectedAttachment || null;
+  const selectedReportType = getNetSuiteSelectedReportType(workspace);
+  const reportTypeOptions = getNetSuiteWorkspaceReportTypes(workspace);
+  const filteredAttachments = getNetSuiteFilteredAttachments(workspace, selectedReportType);
   netsuiteWorkspace.hidden = false;
   netsuiteWorkspaceEmpty.hidden = true;
 
   const summaryCards = [
     ["Property", property.property_name || property.property_slug || "Property"],
-    ["Supported Attachments", Array.isArray(workspace.supportedAttachments) ? workspace.supportedAttachments.length : 0],
-    ["Selected Report", selectedAttachment ? selectedAttachment.reportTitle : "None selected"],
+    ["Source Types", reportTypeOptions.length],
+    ["Selected Type", selectedAttachment ? (selectedAttachment.reportTitle || selectedAttachment.reportType) : "None selected"],
+    ["Available Reports", filteredAttachments.length],
+    ["Selected Attachment", selectedAttachment ? selectedAttachment.attachmentName : "None selected"],
     ["Report Date", selectedAttachment && selectedAttachment.reportDate ? selectedAttachment.reportDate : "Not detected"],
     ["Received", selectedAttachment ? formatDateTime(selectedAttachment.receivedAt) : "Unknown"],
     ["Discovered Items", workspace.discoverySummary ? workspace.discoverySummary.discoveredItemCount : 0]
@@ -950,12 +1024,73 @@ function renderNetSuitePosting() {
     </article>
   `).join("");
 
+  renderNetSuiteReportTypeOptions(workspace);
   renderNetSuiteAttachmentOptions(workspace);
   renderNetSuitePostingDefaults(workspace.defaults);
   setNetSuitePostingStatus(state.netsuitePostingStatus, state.netsuitePostingTone);
   renderNetSuitePostingMappings(workspace.mappings || []);
   renderNetSuitePostingPreview(workspace.runs || []);
   renderNetSuitePostingRuns(workspace.runs || []);
+}
+
+function normalizeNetSuiteReportTypeSummaries(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+
+      const reportType = typeof entry.reportType === "string" ? entry.reportType : "";
+      if (!reportType) {
+        return null;
+      }
+
+      return {
+        reportType,
+        reportTitle: typeof entry.reportTitle === "string" && entry.reportTitle
+          ? entry.reportTitle
+          : reportType,
+        attachmentCount: Number(entry.attachmentCount) > 0 ? Number(entry.attachmentCount) : 0
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeNetSuiteReportTypeSummariesFromAttachments(attachments) {
+  const summaryByType = new Map();
+
+  for (const attachment of attachments) {
+    const reportType = attachment && typeof attachment.reportType === "string" ? attachment.reportType : "";
+    if (!reportType) {
+      continue;
+    }
+
+    const existing = summaryByType.get(reportType);
+    if (existing) {
+      existing.attachmentCount += 1;
+      continue;
+    }
+
+    summaryByType.set(reportType, {
+      reportType,
+      reportTitle: typeof attachment.reportTitle === "string" && attachment.reportTitle
+        ? attachment.reportTitle
+        : reportType,
+      attachmentCount: 1
+    });
+  }
+
+  return Array.from(summaryByType.values()).sort((left, right) => {
+    const titleComparison = String(left.reportTitle || "").localeCompare(String(right.reportTitle || ""));
+    if (titleComparison !== 0) {
+      return titleComparison;
+    }
+    return String(left.reportType || "").localeCompare(String(right.reportType || ""));
+  });
 }
 
 function renderLatestRun() {
@@ -1125,13 +1260,38 @@ function renderSettings() {
   `).join("");
 }
 
+function renderNetSuiteReportTypeOptions(workspace) {
+  if (!netsuiteReportTypeSelect) {
+    return;
+  }
+
+  const reportTypes = getNetSuiteWorkspaceReportTypes(workspace);
+  const selectedReportType = getNetSuiteSelectedReportType(workspace);
+  if (reportTypes.length === 0) {
+    netsuiteReportTypeSelect.innerHTML = '<option value="">No source report types available</option>';
+    return;
+  }
+
+  netsuiteReportTypeSelect.innerHTML = reportTypes.map((entry) => `
+    <option value="${escapeHtml(entry.reportType)}" ${entry.reportType === selectedReportType ? "selected" : ""}>
+      ${escapeHtml(`${entry.reportTitle} (${entry.attachmentCount} ${entry.attachmentCount === 1 ? "report" : "reports"})`)}
+    </option>
+  `).join("");
+}
+
 function renderNetSuiteAttachmentOptions(workspace) {
   if (!netsuiteAttachmentSelect) {
     return;
   }
 
-  const attachments = Array.isArray(workspace.supportedAttachments) ? workspace.supportedAttachments : [];
+  const selectedReportType = getNetSuiteSelectedReportType(workspace);
+  const attachments = getNetSuiteFilteredAttachments(workspace, selectedReportType);
   const selectedAttachmentId = workspace.selectedAttachment ? Number(workspace.selectedAttachment.attachmentId) : 0;
+  if (attachments.length === 0) {
+    netsuiteAttachmentSelect.innerHTML = '<option value="">No source attachments available for this report type</option>';
+    return;
+  }
+
   netsuiteAttachmentSelect.innerHTML = attachments.map((attachment) => `
     <option value="${escapeHtml(String(attachment.attachmentId))}" ${attachment.attachmentId === selectedAttachmentId ? "selected" : ""}>
       ${escapeHtml([
@@ -1367,6 +1527,8 @@ function syncNetSuitePostingControls() {
 
   const busy = state.netsuitePostingLoading || state.netsuitePostingSaving || state.netsuitePostingPreviewing || state.netsuitePostingSubmitting || !isAdmin();
   const hasWorkspace = Boolean(state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.selectedAttachment);
+  const hasReportTypes = Boolean(state.netsuitePostingWorkspace && getNetSuiteWorkspaceReportTypes(state.netsuitePostingWorkspace).length > 0);
+  netsuiteReportTypeSelect.disabled = busy || !hasReportTypes;
   netsuiteAttachmentSelect.disabled = busy || !hasWorkspace;
   netsuitePostingExternalPrefix.disabled = busy || !hasWorkspace;
   netsuitePostingBalancingGl.disabled = busy || !hasWorkspace;
@@ -1393,7 +1555,7 @@ function setNetSuitePostingStatus(message, tone) {
   netsuitePostingStatus.className = `form-status ${tone}`;
 }
 
-async function loadNetSuiteWorkspace(propertySlug, attachmentId = null) {
+async function loadNetSuiteWorkspace(propertySlug, attachmentId = null, reportType = null) {
   if (!isAdmin() || !netsuitePostingAvailable) {
     return;
   }
@@ -1403,7 +1565,7 @@ async function loadNetSuiteWorkspace(propertySlug, attachmentId = null) {
   syncNetSuitePostingControls();
 
   try {
-    state.netsuitePostingWorkspace = await fetchNetSuiteWorkspace(propertySlug, attachmentId);
+    state.netsuitePostingWorkspace = await fetchNetSuiteWorkspace(propertySlug, attachmentId, reportType);
     state.netsuitePostingSelectedRunId = Array.isArray(state.netsuitePostingWorkspace.runs) && state.netsuitePostingWorkspace.runs.length > 0
       ? state.netsuitePostingWorkspace.runs[0].id || ""
       : "";
@@ -1533,7 +1695,11 @@ async function submitNetSuitePostingPreview() {
     const message = error && error.message ? error.message : String(error);
     setNetSuitePostingStatus(message, "error");
     try {
-      state.netsuitePostingWorkspace = await fetchNetSuiteWorkspace(propertySlug, Number(netsuiteAttachmentSelect.value));
+      state.netsuitePostingWorkspace = await fetchNetSuiteWorkspace(
+        propertySlug,
+        Number(netsuiteAttachmentSelect.value),
+        netsuiteReportTypeSelect ? netsuiteReportTypeSelect.value : null
+      );
       renderNetSuitePosting();
     } catch {
       // Keep the current workspace if the follow-up refresh fails.
@@ -1544,8 +1710,17 @@ async function submitNetSuitePostingPreview() {
   }
 }
 
-async function fetchNetSuiteWorkspace(propertySlug, attachmentId = null) {
-  const suffix = attachmentId ? `?attachmentId=${encodeURIComponent(String(attachmentId))}` : "";
+async function fetchNetSuiteWorkspace(propertySlug, attachmentId = null, reportType = null) {
+  const params = new URLSearchParams();
+  if (attachmentId) {
+    params.set("attachmentId", String(attachmentId));
+  }
+  if (reportType) {
+    params.set("reportType", reportType);
+  }
+
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
   return fetchJson(`/api/netsuite/properties/${encodeURIComponent(propertySlug)}${suffix}`);
 }
 

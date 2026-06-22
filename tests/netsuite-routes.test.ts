@@ -12,6 +12,7 @@ import { AppDatabase } from "../src/db/Database.js";
 import { createApp } from "../src/http/createApp.js";
 import { NetSuiteConnectionService } from "../src/services/NetSuiteConnectionService.js";
 import { IngestionService } from "../src/services/IngestionService.js";
+import type { ReportType } from "../src/types.js";
 
 const ADMIN_PASSWORD = "AdminPass123!";
 const VIEWER_PASSWORD = "ViewerPass123!";
@@ -488,6 +489,26 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
         }
       ]
     });
+    seedParsedAttachment(context.database, {
+      propertyName: "Holiday Inn Express Pendleton",
+      propertySlug: "holiday-inn-express-pendleton",
+      reportType: "closed_folio_balance_rows",
+      reportTitle: "Closed Folio Balances",
+      reportDate: "2026-05-21",
+      attachmentName: "closed-folio-balances.pdf",
+      rows: [
+        {
+          section: "Closed Folio Balances",
+          row_kind: "summary",
+          summary_label: "City Ledger",
+          guest_name: null,
+          company_name: null,
+          metric_name: null,
+          net_change: "250.00",
+          metric_value: null
+        }
+      ]
+    });
     const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
 
     const listResponse = await fetch(`${context.baseUrl}/api/netsuite/properties`, {
@@ -497,6 +518,10 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
     const listPayload = await listResponse.json() as { properties: Array<Record<string, unknown>> };
     assert.equal(listPayload.properties.length, 1);
     assert.equal(listPayload.properties[0]?.property_slug, "holiday-inn-express-pendleton");
+    assert.deepEqual(
+      (listPayload.properties[0]?.supportedReportTypes as Array<Record<string, unknown>>).map((entry) => entry.reportType),
+      ["all_transaction_rows", "closed_folio_balance_rows"]
+    );
 
     const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?attachmentId=${attachmentRecordId}`, {
       headers: { cookie: adminCookie }
@@ -506,6 +531,16 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
     assert.equal((workspacePayload.selectedAttachment as Record<string, unknown>).attachmentId, attachmentRecordId);
     assert.equal(Array.isArray(workspacePayload.mappings), true);
     assert.equal((workspacePayload.mappings as Array<Record<string, unknown>>).length, 2);
+    assert.equal((workspacePayload.discoverySummary as Record<string, unknown>).supportedReportTypeCount, 2);
+
+    const filteredWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?reportType=closed_folio_balance_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(filteredWorkspaceResponse.status, 200);
+    const filteredWorkspacePayload = await filteredWorkspaceResponse.json() as Record<string, unknown>;
+    assert.equal(filteredWorkspacePayload.selectedReportType, "closed_folio_balance_rows");
+    assert.equal((filteredWorkspacePayload.selectedAttachment as Record<string, unknown>).reportType, "closed_folio_balance_rows");
+    assert.equal((filteredWorkspacePayload.availableReportTypes as Array<Record<string, unknown>>).length, 2);
 
     const saveResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton`, {
       method: "PUT",
@@ -682,7 +717,7 @@ function seedParsedAttachment(
   options: {
     propertyName: string;
     propertySlug: string;
-    reportType: "all_transaction_rows";
+    reportType: ReportType;
     reportTitle: string;
     reportDate: string;
     attachmentName: string;

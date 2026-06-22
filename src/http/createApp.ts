@@ -326,12 +326,16 @@ export function createApp(
     const attachmentId = request.query.attachmentId === undefined
       ? null
       : Number(request.query.attachmentId);
+    const requestedReportType = typeof request.query.reportType === "string"
+      ? request.query.reportType
+      : null;
 
     try {
       response.json(
         netSuitePostingService.getWorkspace(
           request.params.propertySlug,
-          Number.isInteger(attachmentId) && attachmentId && attachmentId > 0 ? attachmentId : null
+          Number.isInteger(attachmentId) && attachmentId && attachmentId > 0 ? attachmentId : null,
+          requestedReportType
         )
       );
     } catch (error) {

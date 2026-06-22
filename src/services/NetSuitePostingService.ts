@@ -25,6 +25,12 @@ interface SupportedAttachmentSummary {
   receivedAt: string;
 }
 
+interface SupportedReportTypeSummary {
+  reportType: SupportedMonetaryReportType;
+  reportTitle: string;
+  attachmentCount: number;
+}
+
 interface DiscoveredMonetaryItem {
   mappingKey: string;
   reportType: SupportedMonetaryReportType;
@@ -112,6 +118,7 @@ interface PostingDefaultsInput {
 
 interface MonetaryWorkspacePayload {
   property: Record<string, unknown>;
+  availableReportTypes: SupportedReportTypeSummary[];
   supportedAttachments: SupportedAttachmentSummary[];
   selectedAttachment: SupportedAttachmentSummary | null;
   selectedReportType: SupportedMonetaryReportType | null;
@@ -380,26 +387,38 @@ export class NetSuitePostingService {
     const summaries = this.database.listNetSuitePostingPropertySummaries([...SUPPORTED_MONETARY_REPORT_TYPES]);
     return summaries.map((entry) => ({
       ...entry,
-      supportedReportTypes: [...SUPPORTED_MONETARY_REPORT_TYPES]
+      supportedReportTypes: buildSupportedReportTypeSummaries(
+        this.listSupportedAttachments(String(entry.property_slug || ""))
+      )
     }));
   }
 
-  getWorkspace(propertySlug: string, attachmentId?: number | null): MonetaryWorkspacePayload {
+  getWorkspace(
+    propertySlug: string,
+    attachmentId?: number | null,
+    requestedReportType?: string | null
+  ): MonetaryWorkspacePayload {
     const property = this.database.getPropertySummary(propertySlug);
     if (!property) {
       throw new NetSuitePostingError(`Property ${propertySlug} was not found.`, 404);
     }
 
     const supportedAttachments = this.listSupportedAttachments(propertySlug);
-    const selectedAttachment = this.selectAttachment(supportedAttachments, attachmentId ?? null);
+    const availableReportTypes = buildSupportedReportTypeSummaries(supportedAttachments);
+    const selectedAttachment = this.selectAttachment(
+      supportedAttachments,
+      attachmentId ?? null,
+      requestedReportType ?? null
+    );
     if (!selectedAttachment) {
       return {
         property,
+        availableReportTypes,
         supportedAttachments,
         selectedAttachment: null,
         selectedReportType: null,
         discoverySummary: {
-          supportedReportTypeCount: SUPPORTED_MONETARY_REPORT_TYPES.length,
+          supportedReportTypeCount: availableReportTypes.length,
           attachmentCount: supportedAttachments.length,
           discoveredItemCount: 0
         },
@@ -421,11 +440,12 @@ export class NetSuitePostingService {
 
     return {
       property,
+      availableReportTypes,
       supportedAttachments,
       selectedAttachment,
       selectedReportType: selectedAttachment.reportType,
       discoverySummary: {
-        supportedReportTypeCount: SUPPORTED_MONETARY_REPORT_TYPES.length,
+        supportedReportTypeCount: availableReportTypes.length,
         attachmentCount: supportedAttachments.length,
         discoveredItemCount: discovered.length
       },
@@ -585,13 +605,19 @@ export class NetSuitePostingService {
 
   private selectAttachment(
     attachments: SupportedAttachmentSummary[],
-    attachmentId: number | null
+    attachmentId: number | null,
+    requestedReportType: string | null
   ): SupportedAttachmentSummary | null {
     if (attachmentId && Number.isInteger(attachmentId)) {
       const matched = attachments.find((attachment) => attachment.attachmentId === attachmentId);
       if (matched) {
         return matched;
       }
+    }
+
+    const normalizedReportType = normalizeSupportedReportType(requestedReportType);
+    if (normalizedReportType) {
+      return attachments.find((attachment) => attachment.reportType === normalizedReportType) ?? attachments[0] ?? null;
     }
 
     return attachments[0] ?? null;
@@ -1118,6 +1144,34 @@ function roundMoney(value: number): number {
 
 function formatMoney(value: number): string {
   return roundMoney(value).toFixed(2);
+}
+
+function buildSupportedReportTypeSummaries(
+  attachments: SupportedAttachmentSummary[]
+): SupportedReportTypeSummary[] {
+  const summaryByType = new Map<SupportedMonetaryReportType, SupportedReportTypeSummary>();
+
+  for (const attachment of attachments) {
+    const existing = summaryByType.get(attachment.reportType);
+    if (existing) {
+      existing.attachmentCount += 1;
+      continue;
+    }
+
+    summaryByType.set(attachment.reportType, {
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle || REPORT_TITLES[attachment.reportType],
+      attachmentCount: 1
+    });
+  }
+
+  return Array.from(summaryByType.values()).sort((left, right) => {
+    const titleComparison = left.reportTitle.localeCompare(right.reportTitle);
+    if (titleComparison !== 0) {
+      return titleComparison;
+    }
+    return left.reportType.localeCompare(right.reportType);
+  });
 }
 
 function normalizeSupportedReportType(value: unknown): SupportedMonetaryReportType | null {
