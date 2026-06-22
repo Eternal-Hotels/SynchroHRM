@@ -28,7 +28,7 @@ test("admin NetSuite settings UI wires the expected fields and endpoints", async
 
   assert.match(html, /NetSuite Connector/);
   assert.match(html, /NetSuite Statistical GL Workspace/);
-  assert.match(html, /Phase 1: Statistical lines/);
+  assert.match(html, /Phase 1: Statistical categories/);
   assert.match(html, /Test Connection/);
   assert.match(html, /Export Metadata Catalog CSV/);
   assert.match(html, /Clear Saved Key/);

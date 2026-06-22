@@ -748,6 +748,21 @@ function discoverAllPostingItems(
   rows: Array<Record<string, unknown>>,
   attachment: SupportedAttachmentSummary
 ): DiscoveredMonetaryItem[] {
+  if (attachment.reportType === "credit_card_transaction_rows") {
+    return discoverCreditCardTransactionItems(rows, attachment);
+  }
+
+  if (attachment.reportType === "best_western_daily_report_rows") {
+    return discoverBestWesternDailyReportItems(rows, attachment);
+  }
+
+  return discoverGenericPostingItems(rows, attachment);
+}
+
+function discoverGenericPostingItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
   const byKey = new Map<string, DiscoveredMonetaryItem>();
 
   for (const row of rows) {
@@ -768,6 +783,98 @@ function discoverAllPostingItems(
   }
 
   return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
+function discoverCreditCardTransactionItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  if (rows.length === 0) {
+    return [];
+  }
+
+  let netAmount = 0;
+  for (const row of rows) {
+    netAmount += parseAmount(row.charge_amount) ?? 0;
+    netAmount -= parseAmount(row.credit_amount) ?? 0;
+  }
+
+  return [{
+    mappingKey: buildMappingKey(attachment.reportType, "net_amount", ["credit_card_transactions"]),
+    reportType: attachment.reportType,
+    reportTitle: attachment.reportTitle,
+    groupLabel: attachment.reportTitle || REPORT_TITLES[attachment.reportType] || "Credit Card Transactions",
+    itemLabel: "All Cards",
+    amountField: "net_amount",
+    amountFieldLabel: "Net Amount",
+    defaultPostingPolarity: "credit_positive",
+    amount: roundMoney(netAmount)
+  }];
+}
+
+function discoverBestWesternDailyReportItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const byKey = new Map<string, DiscoveredMonetaryItem>();
+
+  for (const row of rows) {
+    const amount = parseAmount(row.today_value);
+    if (amount === null) {
+      continue;
+    }
+
+    const groupLabel = buildBestWesternDailyGroupLabel(row, attachment);
+    const itemLabel = buildBestWesternDailyCategoryLabel(row, attachment);
+    const mappingKey = buildMappingKey(attachment.reportType, "today_value", [groupLabel, itemLabel]);
+    const existing = byKey.get(mappingKey);
+    if (existing) {
+      existing.amount = roundMoney(existing.amount + amount);
+      continue;
+    }
+
+    byKey.set(mappingKey, {
+      mappingKey,
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle,
+      groupLabel,
+      itemLabel,
+      amountField: "today_value",
+      amountFieldLabel: "Today Value",
+      defaultPostingPolarity: inferMetricPolarity("today_value", groupLabel, itemLabel),
+      amount: roundMoney(amount)
+    });
+  }
+
+  return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
+function buildBestWesternDailyGroupLabel(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): string {
+  const parts = [
+    normalizeWhitespace(row.section),
+    normalizeWhitespace(row.subsection)
+  ].filter(Boolean);
+  if (parts.length > 0) {
+    return parts.join(" / ");
+  }
+
+  return attachment.reportTitle || REPORT_TITLES[attachment.reportType] || "Daily Report";
+}
+
+function buildBestWesternDailyCategoryLabel(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): string {
+  const category = [
+    normalizeWhitespace(row.group_name),
+    normalizeWhitespace(row.metric_name),
+    normalizeWhitespace(row.posting_description),
+    normalizeWhitespace(row.posting_code)
+  ].find(Boolean);
+  return category || attachment.attachmentName || attachment.reportTitle || "Daily Report Category";
 }
 
 function buildPostingItemCandidates(

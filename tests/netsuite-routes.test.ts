@@ -684,6 +684,153 @@ test("NetSuite posting workspace discovers broad report metrics, builds previews
   }
 });
 
+test("NetSuite posting workspace groups BW daily report categories and collapses credit card logs", async () => {
+  const context = await createRouteTestContext({
+    fetchImpl: async () => mockResponse(404, { error: "Unexpected request" })
+  });
+
+  try {
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "credit_card_transaction_rows",
+      reportTitle: "Credit Card Transactions",
+      reportDate: "2026-05-31",
+      attachmentName: "CreditCardBatchReport.pdf",
+      rows: [
+        {
+          card_type: "VS",
+          charge_amount: "200.00",
+          credit_amount: "0.00",
+          transaction_status: "Settled"
+        },
+        {
+          card_type: "MC",
+          charge_amount: "18.75",
+          credit_amount: "0.00",
+          transaction_status: "Settled"
+        },
+        {
+          card_type: "VS",
+          charge_amount: "0.00",
+          credit_amount: "25.00",
+          transaction_status: "Settled"
+        }
+      ]
+    });
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "best_western_daily_report_rows",
+      reportTitle: "Daily Report",
+      reportDate: "2026-05-31",
+      attachmentName: "DailyReport.pdf",
+      rows: [
+        {
+          section: "Statistical Recap",
+          subsection: null,
+          group_name: null,
+          row_kind: "metric",
+          metric_name: "Occupied",
+          posting_code: null,
+          posting_description: null,
+          today_value: "23",
+          mtd_value: "949",
+          ytd_value: "3789"
+        },
+        {
+          section: "Statistical Recap",
+          subsection: null,
+          group_name: null,
+          row_kind: "metric",
+          metric_name: "No Show",
+          posting_code: null,
+          posting_description: null,
+          today_value: "0",
+          mtd_value: "2",
+          ytd_value: "25"
+        },
+        {
+          section: "Detail Listing",
+          subsection: "Guest Ledger",
+          group_name: "GL CREDIT CARDS REV",
+          row_kind: "detail",
+          metric_name: null,
+          posting_code: "MC",
+          posting_description: "PAYMENT MASTERCARD",
+          today_value: "-2718.08",
+          mtd_value: "-146317.95",
+          ytd_value: "-526384.74"
+        },
+        {
+          section: "Detail Listing",
+          subsection: "Guest Ledger",
+          group_name: "GL CREDIT CARDS REV",
+          row_kind: "detail",
+          metric_name: null,
+          posting_code: "VS",
+          posting_description: "PAYMENT VISA/MC",
+          today_value: "-840.59",
+          mtd_value: "-50244.73",
+          ytd_value: "-194730.82"
+        },
+        {
+          section: "Detail Listing",
+          subsection: "Guest Ledger",
+          group_name: "GL ROOM REV",
+          row_kind: "detail",
+          metric_name: null,
+          posting_code: "AR",
+          posting_description: "ROOM CHARGE",
+          today_value: "4125.44",
+          mtd_value: "125447.11",
+          ytd_value: "482995.37"
+        }
+      ]
+    });
+
+    const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
+
+    const creditCardWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites?reportType=credit_card_transaction_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(creditCardWorkspaceResponse.status, 200);
+    const creditCardWorkspacePayload = await creditCardWorkspaceResponse.json() as Record<string, unknown>;
+    assert.equal(creditCardWorkspacePayload.selectedReportType, "credit_card_transaction_rows");
+    const creditCardMappings = creditCardWorkspacePayload.mappings as Array<Record<string, unknown>>;
+    assert.equal(creditCardMappings.length, 1);
+    assert.equal(creditCardMappings[0]?.groupLabel, "Credit Card Transactions");
+    assert.equal(creditCardMappings[0]?.itemLabel, "All Cards");
+    assert.equal(creditCardMappings[0]?.amountField, "net_amount");
+    assert.equal(creditCardMappings[0]?.currentAmount, "193.75");
+
+    const dailyWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites?reportType=best_western_daily_report_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(dailyWorkspaceResponse.status, 200);
+    const dailyWorkspacePayload = await dailyWorkspaceResponse.json() as Record<string, unknown>;
+    assert.equal(dailyWorkspacePayload.selectedReportType, "best_western_daily_report_rows");
+    const dailyMappings = dailyWorkspacePayload.mappings as Array<Record<string, unknown>>;
+    assert.equal(dailyMappings.length, 4);
+    assert.ok(dailyMappings.every((entry) => entry.amountField === "today_value"));
+    assert.equal(dailyMappings.some((entry) => entry.amountField === "mtd_value"), false);
+    assert.equal(dailyMappings.some((entry) => entry.amountField === "ytd_value"), false);
+
+    const occupiedMapping = dailyMappings.find((entry) => entry.itemLabel === "Occupied");
+    assert.ok(occupiedMapping);
+    assert.equal(occupiedMapping?.currentAmount, "23.00");
+
+    const creditCardsRevenueMapping = dailyMappings.find((entry) => (
+      entry.groupLabel === "Detail Listing / Guest Ledger"
+      && entry.itemLabel === "GL CREDIT CARDS REV"
+    ));
+    assert.ok(creditCardsRevenueMapping);
+    assert.equal(creditCardsRevenueMapping?.currentAmount, "-3558.67");
+  } finally {
+    await context.dispose();
+  }
+});
+
 async function createRouteTestContext(options: {
   masterKey?: string | null;
   fetchImpl: typeof fetch;

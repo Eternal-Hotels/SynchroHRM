@@ -1014,7 +1014,7 @@ function renderNetSuitePosting() {
     ["Selected Attachment", selectedAttachment ? selectedAttachment.attachmentName : "None selected"],
     ["Report Date", selectedAttachment && selectedAttachment.reportDate ? selectedAttachment.reportDate : "Not detected"],
     ["Received", selectedAttachment ? formatDateTime(selectedAttachment.receivedAt) : "Unknown"],
-    ["Discovered Items", workspace.discoverySummary ? workspace.discoverySummary.discoveredItemCount : 0]
+    ["Discovered Categories", workspace.discoverySummary ? workspace.discoverySummary.discoveredItemCount : 0]
   ];
 
   netsuiteWorkspaceSummary.innerHTML = summaryCards.map(([label, value]) => `
@@ -1341,7 +1341,7 @@ function renderNetSuitePostingMappings(mappings) {
 
   if (!Array.isArray(mappings) || mappings.length === 0) {
     netsuitePostingMappingSummary.className = "notes-block empty";
-    netsuitePostingMappingSummary.textContent = "No statistical line candidates were discovered for the selected attachment.";
+    netsuitePostingMappingSummary.textContent = "No grouped statistical categories were discovered for the selected attachment.";
     netsuitePostingMappings.innerHTML = "";
     return;
   }
@@ -1349,10 +1349,10 @@ function renderNetSuitePostingMappings(mappings) {
   const missingCount = mappings.filter((entry) => !(entry.netsuiteGlCode || "").trim()).length;
   netsuitePostingMappingSummary.className = "notes-block";
   netsuitePostingMappingSummary.innerHTML = `
-    <strong>${escapeHtml(String(mappings.length))} discovered statistical line candidates</strong>
+    <strong>${escapeHtml(String(mappings.length))} discovered statistical categories</strong>
     <div class="attachment-meta">
       <span>Missing GL codes: ${escapeHtml(String(missingCount))}</span>
-      <span>Every parsed numeric-style field is surfaced here when possible.</span>
+      <span>Mappings are grouped into source categories for the selected report type.</span>
     </div>
   `;
 
@@ -1362,7 +1362,7 @@ function renderNetSuitePostingMappings(mappings) {
         <thead>
           <tr>
             <th>Group</th>
-            <th>Item</th>
+            <th>Category</th>
             <th>Value Field</th>
             <th>Current Value</th>
             <th>GL Code</th>
@@ -1406,7 +1406,7 @@ function renderNetSuitePostingPreview(runs) {
 
   const selectedRun = getSelectedNetSuiteRun(runs);
   if (!selectedRun || !selectedRun.previewPayload) {
-    netsuitePostingPreview.innerHTML = '<div class="empty">Build a preview to inspect the discovered statistical GL lines.</div>';
+    netsuitePostingPreview.innerHTML = '<div class="empty">Build a preview to inspect the grouped statistical GL lines.</div>';
     return;
   }
 
@@ -1447,7 +1447,7 @@ function renderNetSuitePostingPreview(runs) {
           <thead>
             <tr>
               <th>Group</th>
-              <th>Item</th>
+              <th>Category</th>
               <th>GL Code</th>
               <th>Value</th>
               <th>Positive</th>
