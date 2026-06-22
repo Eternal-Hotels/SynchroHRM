@@ -486,6 +486,23 @@ test("NetSuite posting workspace discovers broad report metrics, builds previews
           amount: "11.92",
           username: "systemuser",
           note: "RENT"
+        },
+        {
+          section: "Reservations",
+          transaction_date: "2026-05-22",
+          transaction_time: "12:28:05",
+          confirmation_no: "20645151",
+          guest_name: "DAUER JOEL",
+          room_number: "221",
+          folio_number: "015316",
+          transaction_code: "ST",
+          transaction_description: "State Tax",
+          last_four_digits: null,
+          transaction_type: "TAX",
+          charge_type: "ROOM",
+          amount: "3.08",
+          username: "systemuser",
+          note: "RENT"
         }
       ]
     });
@@ -564,10 +581,12 @@ test("NetSuite posting workspace discovers broad report metrics, builds previews
     assert.equal((workspacePayload.mappings as Array<Record<string, unknown>>).length, 2);
     assert.equal((workspacePayload.discoverySummary as Record<string, unknown>).supportedReportTypeCount, 3);
     const discoveredMappings = workspacePayload.mappings as Array<Record<string, unknown>>;
-    const chargeMapping = discoveredMappings.find((entry) => String(entry.itemLabel || "").includes("Transaction Code: RR"));
-    const taxMapping = discoveredMappings.find((entry) => String(entry.itemLabel || "").includes("Transaction Code: CT"));
+    const chargeMapping = discoveredMappings.find((entry) => entry.itemLabel === "Room Charge");
+    const taxMapping = discoveredMappings.find((entry) => entry.itemLabel === "Room Tax");
     assert.ok(chargeMapping);
     assert.ok(taxMapping);
+    assert.equal(chargeMapping?.currentAmount, "149.00");
+    assert.equal(taxMapping?.currentAmount, "15.00");
 
     const filteredWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?reportType=closed_folio_balance_rows`, {
       headers: { cookie: adminCookie }
@@ -826,6 +845,222 @@ test("NetSuite posting workspace groups BW daily report categories and collapses
     ));
     assert.ok(creditCardsRevenueMapping);
     assert.equal(creditCardsRevenueMapping?.currentAmount, "-3558.67");
+  } finally {
+    await context.dispose();
+  }
+});
+
+test("NetSuite posting workspace collapses operator transactions into grouped ledger categories", async () => {
+  const context = await createRouteTestContext({
+    fetchImpl: async () => mockResponse(404, { error: "Unexpected request" })
+  });
+
+  try {
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "operator_transaction_rows",
+      reportTitle: "Operator Transactions",
+      reportDate: "2026-05-31",
+      attachmentName: "OperatorTransactionsReport.pdf",
+      rows: [
+        {
+          transaction_code: "VS",
+          transaction_description: "PAYMENT VISA/MC 121-A",
+          transaction_id: "1001",
+          confirmation_no: "C1",
+          guest_name: "Guest One",
+          reference_value: "ref-1",
+          amount: "-100.00",
+          adjustment_amount: "0.00",
+          original_id: null,
+          original_date: null,
+          void_from_value: null,
+          clerk_name: "clerk",
+          transaction_time: "1:00 AM"
+        },
+        {
+          transaction_code: "VS",
+          transaction_description: "PAYMENT VISA/MC 131-A",
+          transaction_id: "1002",
+          confirmation_no: "C2",
+          guest_name: "Guest Two",
+          reference_value: "ref-2",
+          amount: "-50.00",
+          adjustment_amount: "5.00",
+          original_id: null,
+          original_date: null,
+          void_from_value: null,
+          clerk_name: "clerk",
+          transaction_time: "1:05 AM"
+        },
+        {
+          transaction_code: "7V",
+          transaction_description: "ADV DEP VISA 121-A",
+          transaction_id: "1003",
+          confirmation_no: "C3",
+          guest_name: "Guest Three",
+          reference_value: "ref-3",
+          amount: "-25.00",
+          adjustment_amount: "0.00",
+          original_id: null,
+          original_date: null,
+          void_from_value: null,
+          clerk_name: "clerk",
+          transaction_time: "1:10 AM"
+        },
+        {
+          transaction_code: "CH",
+          transaction_description: "PAYMENT CASH 105-A",
+          transaction_id: "1004",
+          confirmation_no: "C4",
+          guest_name: "Guest Four",
+          reference_value: "ref-4",
+          amount: "0.00",
+          adjustment_amount: "1.00",
+          original_id: null,
+          original_date: null,
+          void_from_value: null,
+          clerk_name: "clerk",
+          transaction_time: "1:15 AM"
+        }
+      ]
+    });
+
+    const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
+    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites?reportType=operator_transaction_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(workspaceResponse.status, 200);
+    const workspacePayload = await workspaceResponse.json() as Record<string, unknown>;
+    assert.equal(workspacePayload.selectedReportType, "operator_transaction_rows");
+
+    const mappings = workspacePayload.mappings as Array<Record<string, unknown>>;
+    assert.equal(mappings.length, 3);
+    assert.ok(mappings.every((entry) => entry.groupLabel === "Operator Transactions"));
+    assert.ok(mappings.every((entry) => entry.amountField === "ledger_total"));
+
+    const paymentVisa = mappings.find((entry) => entry.itemLabel === "PAYMENT VISA/MC");
+    assert.ok(paymentVisa);
+    assert.equal(paymentVisa?.currentAmount, "-145.00");
+
+    const advanceDeposit = mappings.find((entry) => entry.itemLabel === "ADV DEP VISA");
+    assert.ok(advanceDeposit);
+    assert.equal(advanceDeposit?.currentAmount, "-25.00");
+
+    const paymentCash = mappings.find((entry) => entry.itemLabel === "PAYMENT CASH");
+    assert.ok(paymentCash);
+    assert.equal(paymentCash?.currentAmount, "1.00");
+  } finally {
+    await context.dispose();
+  }
+});
+
+test("NetSuite posting workspace collapses daily transaction logs into grouped ledger categories", async () => {
+  const context = await createRouteTestContext({
+    fetchImpl: async () => mockResponse(404, { error: "Unexpected request" })
+  });
+
+  try {
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "daily_transaction_log_rows",
+      reportTitle: "Daily Transaction Log",
+      reportDate: "2026-05-31",
+      attachmentName: "TransactionLogReport.pdf",
+      rows: [
+        {
+          transaction_code: "VS",
+          transaction_description: "PAYMENT VISA/MC",
+          room_number: "121-A",
+          transaction_id: "2001",
+          confirmation_no: "D1",
+          guest_name: "Guest One",
+          reference_value: null,
+          posted_amount: "-100.00",
+          adjusted_amount: null,
+          original_id: null,
+          original_date: null,
+          void_from_value: null,
+          clerk_name: "clerk",
+          transaction_time: "1:00 AM"
+        },
+        {
+          transaction_code: "VS",
+          transaction_description: "PAYMENT VISA/MC",
+          room_number: "131-A",
+          transaction_id: "2002",
+          confirmation_no: "D2",
+          guest_name: "Guest Two",
+          reference_value: null,
+          posted_amount: "-50.00",
+          adjusted_amount: "5.00",
+          original_id: null,
+          original_date: null,
+          void_from_value: null,
+          clerk_name: "clerk",
+          transaction_time: "1:05 AM"
+        },
+        {
+          transaction_code: "RC",
+          transaction_description: "ROOM CHRG REVENUE",
+          room_number: "104-A",
+          transaction_id: "2003",
+          confirmation_no: "D3",
+          guest_name: "Guest Three",
+          reference_value: null,
+          posted_amount: "250.00",
+          adjusted_amount: null,
+          original_id: null,
+          original_date: null,
+          void_from_value: null,
+          clerk_name: "clerk",
+          transaction_time: "1:10 AM"
+        },
+        {
+          transaction_code: "91",
+          transaction_description: "TRAVEL PENDLETON ASSESSMENT",
+          room_number: null,
+          transaction_id: "2004",
+          confirmation_no: "D4",
+          guest_name: "Guest Four",
+          reference_value: null,
+          posted_amount: null,
+          adjusted_amount: "-4.00",
+          original_id: "1999",
+          original_date: null,
+          void_from_value: "X",
+          clerk_name: "clerk",
+          transaction_time: "1:15 AM"
+        }
+      ]
+    });
+
+    const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
+    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites?reportType=daily_transaction_log_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(workspaceResponse.status, 200);
+    const workspacePayload = await workspaceResponse.json() as Record<string, unknown>;
+    assert.equal(workspacePayload.selectedReportType, "daily_transaction_log_rows");
+
+    const mappings = workspacePayload.mappings as Array<Record<string, unknown>>;
+    assert.equal(mappings.length, 3);
+    assert.ok(mappings.every((entry) => entry.groupLabel === "Daily Transaction Log"));
+    assert.ok(mappings.every((entry) => entry.amountField === "ledger_total"));
+
+    const paymentVisa = mappings.find((entry) => entry.itemLabel === "PAYMENT VISA/MC");
+    assert.ok(paymentVisa);
+    assert.equal(paymentVisa?.currentAmount, "-145.00");
+
+    const roomRevenue = mappings.find((entry) => entry.itemLabel === "ROOM CHRG REVENUE");
+    assert.ok(roomRevenue);
+    assert.equal(roomRevenue?.currentAmount, "250.00");
+
+    const assessment = mappings.find((entry) => entry.itemLabel === "TRAVEL PENDLETON ASSESSMENT");
+    assert.ok(assessment);
+    assert.equal(assessment?.currentAmount, "-4.00");
   } finally {
     await context.dispose();
   }

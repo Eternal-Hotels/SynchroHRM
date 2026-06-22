@@ -752,6 +752,18 @@ function discoverAllPostingItems(
     return discoverCreditCardTransactionItems(rows, attachment);
   }
 
+  if (attachment.reportType === "operator_transaction_rows") {
+    return discoverOperatorTransactionItems(rows, attachment);
+  }
+
+  if (attachment.reportType === "daily_transaction_log_rows") {
+    return discoverDailyTransactionLogItems(rows, attachment);
+  }
+
+  if (attachment.reportType === "all_transaction_rows") {
+    return discoverAllTransactionItems(rows, attachment);
+  }
+
   if (attachment.reportType === "best_western_daily_report_rows") {
     return discoverBestWesternDailyReportItems(rows, attachment);
   }
@@ -810,6 +822,183 @@ function discoverCreditCardTransactionItems(
     defaultPostingPolarity: "credit_positive",
     amount: roundMoney(netAmount)
   }];
+}
+
+function discoverOperatorTransactionItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const byKey = new Map<string, DiscoveredMonetaryItem>();
+
+  for (const row of rows) {
+    const groupLabel = attachment.reportTitle || REPORT_TITLES[attachment.reportType] || "Operator Transactions";
+    const itemLabel = buildOperatorTransactionCategoryLabel(row, attachment);
+    const amount = roundMoney(
+      (parseAmount(row.amount) ?? 0)
+      + (parseAmount(row.adjustment_amount) ?? 0)
+    );
+    const mappingKey = buildMappingKey(attachment.reportType, "ledger_total", [itemLabel]);
+    const existing = byKey.get(mappingKey);
+    if (existing) {
+      existing.amount = roundMoney(existing.amount + amount);
+      continue;
+    }
+
+    byKey.set(mappingKey, {
+      mappingKey,
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle,
+      groupLabel,
+      itemLabel,
+      amountField: "ledger_total",
+      amountFieldLabel: "Ledger Total",
+      defaultPostingPolarity: inferMetricPolarity("ledger_total", groupLabel, itemLabel),
+      amount
+    });
+  }
+
+  return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
+function discoverDailyTransactionLogItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const byKey = new Map<string, DiscoveredMonetaryItem>();
+
+  for (const row of rows) {
+    const groupLabel = attachment.reportTitle || REPORT_TITLES[attachment.reportType] || "Daily Transaction Log";
+    const itemLabel = buildDailyTransactionLogCategoryLabel(row, attachment);
+    const amount = roundMoney(
+      (parseAmount(row.posted_amount) ?? 0)
+      + (parseAmount(row.adjusted_amount) ?? 0)
+    );
+    const mappingKey = buildMappingKey(attachment.reportType, "ledger_total", [itemLabel]);
+    const existing = byKey.get(mappingKey);
+    if (existing) {
+      existing.amount = roundMoney(existing.amount + amount);
+      continue;
+    }
+
+    byKey.set(mappingKey, {
+      mappingKey,
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle,
+      groupLabel,
+      itemLabel,
+      amountField: "ledger_total",
+      amountFieldLabel: "Ledger Total",
+      defaultPostingPolarity: inferMetricPolarity("ledger_total", groupLabel, itemLabel),
+      amount
+    });
+  }
+
+  return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
+function discoverAllTransactionItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const byKey = new Map<string, DiscoveredMonetaryItem>();
+
+  for (const row of rows) {
+    const groupLabel = attachment.reportTitle || REPORT_TITLES[attachment.reportType] || "All Transactions";
+    const itemLabel = buildAllTransactionCategoryLabel(row, attachment);
+    const amount = roundMoney(parseAmount(row.amount) ?? 0);
+    const mappingKey = buildMappingKey(attachment.reportType, "amount", [itemLabel]);
+    const existing = byKey.get(mappingKey);
+    if (existing) {
+      existing.amount = roundMoney(existing.amount + amount);
+      continue;
+    }
+
+    byKey.set(mappingKey, {
+      mappingKey,
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle,
+      groupLabel,
+      itemLabel,
+      amountField: "amount",
+      amountFieldLabel: "Amount",
+      defaultPostingPolarity: inferMetricPolarity("amount", groupLabel, itemLabel),
+      amount
+    });
+  }
+
+  return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
+function buildOperatorTransactionCategoryLabel(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): string {
+  const description = normalizeWhitespace(row.transaction_description)
+    .replace(/\s+\d{1,4}-[A-Za-z]$/g, "")
+    .replace(/\s+\d{1,4}$/g, "")
+    .trim();
+  return description
+    || normalizeWhitespace(row.transaction_code)
+    || attachment.reportTitle
+    || "Operator Transactions";
+}
+
+function buildAllTransactionCategoryLabel(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): string {
+  const transactionType = normalizeWhitespace(row.transaction_type);
+  const chargeType = normalizeWhitespace(row.charge_type);
+  if (transactionType === "CHARGE" && chargeType) {
+    return `${humanizeCategoryValue(chargeType)} Charge`;
+  }
+  if (transactionType === "TAX" && chargeType) {
+    return `${humanizeCategoryValue(chargeType)} Tax`;
+  }
+  if (transactionType && chargeType) {
+    return `${humanizeCategoryValue(chargeType)} ${humanizeCategoryValue(transactionType)}`;
+  }
+  if (transactionType) {
+    return humanizeCategoryValue(transactionType);
+  }
+  if (chargeType) {
+    return humanizeCategoryValue(chargeType);
+  }
+
+  const description = normalizeWhitespace(row.transaction_description)
+    .replace(/\s+\d{1,4}-[A-Za-z]$/g, "")
+    .replace(/\s+\d{1,4}$/g, "")
+    .trim();
+  return description
+    || normalizeWhitespace(row.transaction_code)
+    || attachment.reportTitle
+    || "All Transactions";
+}
+
+function humanizeCategoryValue(value: string): string {
+  const normalized = normalizeWhitespace(value);
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized
+    .toLowerCase()
+    .replace(/\b(ar|gl|db|adr|ooo)\b/g, (match) => match.toUpperCase())
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function buildDailyTransactionLogCategoryLabel(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): string {
+  const description = normalizeWhitespace(row.transaction_description)
+    .replace(/\s+\d{1,4}-[A-Za-z]$/g, "")
+    .replace(/\s+\d{1,4}$/g, "")
+    .trim();
+  return description
+    || normalizeWhitespace(row.transaction_code)
+    || attachment.reportTitle
+    || "Daily Transaction Log";
 }
 
 function discoverBestWesternDailyReportItems(
