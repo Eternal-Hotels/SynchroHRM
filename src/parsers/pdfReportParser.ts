@@ -715,8 +715,83 @@ function extractChoiceAuditPacketBusinessDate(document: PdfDocumentText): string
   return null;
 }
 
-function parseChoiceAuditPacket(document: PdfDocumentText): Array<Record<string, string | null>> {
-  const rows: Array<Record<string, string | null>> = [];
+type ChoiceAuditRow = Record<string, string | null>;
+
+const CHOICE_AR_AGING_NOTE = [
+  "value_1=current_amount",
+  "value_2=days_30_amount",
+  "value_3=days_60_amount",
+  "value_4=days_90_amount",
+  "value_5=days_120_amount",
+  "value_6=credits_amount",
+  "value_7=balance_amount",
+  "value_8=limit_amount"
+].join("; ");
+
+const CHOICE_CITY_TAX_NOTE_PREFIX = [
+  "value_1=month_1_tax",
+  "value_2=month_1_adults",
+  "value_3=month_2_tax",
+  "value_4=month_2_adults",
+  "value_5=month_3_tax",
+  "value_6=month_3_adults"
+].join("; ");
+
+const CHOICE_FINAL_TRANSACTION_NOTE = [
+  "value_1=opening_balance",
+  "value_2=corrections",
+  "value_3=adjustments",
+  "value_4=todays_net",
+  "value_5=ptd_totals",
+  "value_6=ytd_totals"
+].join("; ");
+
+const CHOICE_HOTEL_JOURNAL_SUMMARY_NOTE = [
+  "value_1=postings",
+  "value_2=corrections",
+  "value_3=adjustments",
+  "value_4=totals",
+  "value_5=guest_ledger",
+  "value_6=ar_ledger",
+  "value_7=advance_deposit_ledger",
+  "value_8=transactions",
+  "value_9=post_count",
+  "value_10=correction_count",
+  "value_11=adjustment_count"
+].join("; ");
+
+const CHOICE_HOTEL_STATISTICS_NOTE = [
+  "value_1=current",
+  "value_2=ptd",
+  "value_3=last_year_ptd",
+  "value_4=ytd",
+  "value_5=last_ytd"
+].join("; ");
+
+const CHOICE_REVENUE_BY_RATE_CODE_NOTE = [
+  "value_1=daily_nights",
+  "value_2=daily_room_pct",
+  "value_3=daily_revenue",
+  "value_4=daily_revenue_pct",
+  "value_5=daily_avg",
+  "value_6=ptd_nights",
+  "value_7=ptd_room_pct",
+  "value_8=ptd_revenue",
+  "value_9=ptd_revenue_pct",
+  "value_10=ptd_avg",
+  "value_11=ytd_nights",
+  "value_12=ytd_room_pct",
+  "value_13=ytd_revenue",
+  "value_14=ytd_revenue_pct",
+  "value_15=ytd_avg"
+].join("; ");
+
+export function parseChoiceAuditPacketDocument(document: PdfDocumentText): Array<Record<string, string | null>> {
+  return parseChoiceAuditPacket(document);
+}
+
+function parseChoiceAuditPacket(document: PdfDocumentText): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
   const pages = groupLinesByPage(document.lines);
 
   for (const page of pages) {
@@ -725,36 +800,731 @@ function parseChoiceAuditPacket(document: PdfDocumentText): Array<Record<string,
       continue;
     }
 
-    let section: string | null = null;
-    for (const line of page) {
-      const text = line.text.trim();
-      if (!text || isChoiceAuditPacketHeaderOrFooter(text, reportName)) {
-        continue;
-      }
-
-      if (isChoiceAuditPacketSectionLine(text)) {
-        section = text;
-        rows.push({
-          page_number: String(line.pageNumber),
-          report_name: reportName,
-          section,
-          row_kind: "section",
-          line_text: text
-        });
-        continue;
-      }
-
-      rows.push({
-        page_number: String(line.pageNumber),
-        report_name: reportName,
-        section,
-        row_kind: isChoiceAuditPacketTotalLine(text) ? "total" : "detail",
-        line_text: text
-      });
-    }
+    rows.push(...parseChoiceAuditPacketPage(page, reportName, document));
   }
 
   return rows;
+}
+
+function parseChoiceAuditPacketPage(
+  page: PdfLine[],
+  reportName: string,
+  document: PdfDocumentText
+): ChoiceAuditRow[] {
+  switch (reportName) {
+    case "A/R Aging":
+      return parseChoiceArAgingPage(page, reportName);
+    case "Advance Deposit Ledger":
+      return parseChoiceAdvanceDepositLedgerPage(page, reportName, document);
+    case "Cancellation List":
+      return parseChoiceCancellationListPage(page, reportName, document);
+    case "City Tax Report":
+      return parseChoiceCityTaxReportPage(page, reportName);
+    case "Complimentary Rooms Report":
+      return parseChoiceComplimentaryRoomsPage(page, reportName);
+    case "Final Transaction Closeout":
+      return parseChoiceFinalTransactionCloseoutPage(page, reportName);
+    case "Guest Ledger":
+      return parseChoiceGuestLedgerPage(page, reportName, document);
+    case "Hotel Journal Detail":
+      return parseChoiceHotelJournalDetailPage(page, reportName, document);
+    case "Hotel Journal Summary":
+      return parseChoiceHotelJournalSummaryPage(page, reportName);
+    case "Hotel Statistics":
+      return parseChoiceHotelStatisticsPage(page, reportName);
+    case "Revenue by Rate Code":
+      return parseChoiceRevenueByRateCodePage(page, reportName);
+    case "Tax Exempt Report":
+      return parseChoiceTaxExemptReportPage(page, reportName);
+    default:
+      return parseChoiceAuditPacketGenericPage(page, reportName);
+  }
+}
+
+function parseChoiceAuditPacketGenericPage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  let section: string | null = null;
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text || isChoiceAuditPacketHeaderOrFooter(text, reportName)) {
+      continue;
+    }
+
+    if (isChoiceAuditPacketSectionLine(text)) {
+      section = text;
+      rows.push(createChoiceAuditRow(line, reportName, section, "section", text));
+      continue;
+    }
+
+    rows.push(createChoiceAuditRow(
+      line,
+      reportName,
+      section,
+      isChoiceAuditPacketTotalLine(text) ? "total" : "detail",
+      text
+    ));
+  }
+
+  return rows;
+}
+
+function parseChoiceArAgingPage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName) || text.startsWith("Account Name Current")) {
+      continue;
+    }
+
+    const rowKind = /^Grand Total:/i.test(text) ? "total" : "detail";
+    const row = createChoiceAuditRow(line, reportName, null, rowKind, text);
+    row.metric_name = rowKind === "total" ? "Grand Total" : null;
+    row.account_number = rowKind === "detail" ? normalizeText(sliceText(line, 37, 99)) : null;
+    row.account_name = rowKind === "detail" ? normalizeText(sliceText(line, 99, 301)) : null;
+    setChoiceMetricValues(row, [
+      normalizeFlexibleNumeric(sliceText(line, 301, 359)),
+      normalizeFlexibleNumeric(sliceText(line, 359, 427)),
+      normalizeFlexibleNumeric(sliceText(line, 427, 487)),
+      normalizeFlexibleNumeric(sliceText(line, 487, 541)),
+      normalizeFlexibleNumeric(sliceText(line, 541, 602)),
+      normalizeFlexibleNumeric(sliceText(line, 602, 662)),
+      normalizeFlexibleNumeric(sliceText(line, 662, 719)),
+      normalizeFlexibleNumeric(sliceText(line, 719, 790))
+    ]);
+    row.balance_amount = row.value_7 ?? null;
+    row.note = CHOICE_AR_AGING_NOTE;
+    if (rowKind === "detail" && !row.account_number && !row.account_name) {
+      continue;
+    }
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceAdvanceDepositLedgerPage(
+  page: PdfLine[],
+  reportName: string,
+  document: PdfDocumentText
+): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  const referenceDate = extractChoiceAuditPacketBusinessDate(document);
+  let section: string | null = null;
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName) || text.startsWith("Status Name Account Arrival Balance")) {
+      continue;
+    }
+
+    if (text === "Guest Accounts" || text === "Group Master Accounts") {
+      section = text;
+      rows.push(createChoiceAuditRow(line, reportName, section, "section", text));
+      continue;
+    }
+
+    const rowKind = isChoiceAuditPacketTotalLine(text) ? "total" : "detail";
+    const row = createChoiceAuditRow(line, reportName, section, rowKind, text);
+    row.balance_amount = normalizeFlexibleNumeric(sliceText(line, 518, 620));
+    if (rowKind === "total") {
+      row.metric_name = normalizeText(text.replace(/:\s*.*$/, ""));
+      rows.push(row);
+      continue;
+    }
+
+    row.status = normalizeText(sliceText(line, 63, 118));
+    row.guest_name = normalizeText(sliceText(line, 118, 353));
+    row.account_number = normalizeText(sliceText(line, 353, 428));
+    row.arrival_date = parseMonthDayWithReferenceYear(sliceText(line, 428, 518), referenceDate);
+    if (!row.guest_name && !row.account_number) {
+      continue;
+    }
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceCancellationListPage(
+  page: PdfLine[],
+  reportName: string,
+  document: PdfDocumentText
+): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  const referenceDate = extractChoiceAuditPacketBusinessDate(document);
+  const detailLines = page.filter((line) => {
+    const text = line.text.trim();
+    return Boolean(text)
+      && !isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)
+      && text !== "Company Group"
+      && !text.startsWith("Account Guest Name Arrival Nights");
+  });
+
+  const blocks = collectLineBlocks(
+    detailLines,
+    (line) => /^\d+$/.test(sliceText(line, 38, 101)),
+    (line) => /^Total Cancellations:/i.test(line.text.trim())
+  );
+
+  for (const block of blocks) {
+    const base = block[0];
+    const row = createChoiceAuditRow(base, reportName, null, "detail", formatChoiceBlockText(block));
+    row.account_number = normalizeText(sliceText(base, 38, 101));
+    row.guest_name = normalizeText(sliceText(base, 101, 266));
+    row.arrival_date = parseMonthDayWithReferenceYear(sliceText(base, 266, 345), referenceDate);
+    row.nights = normalizeFlexibleNumeric(sliceText(base, 345, 379));
+    row.rate_code = normalizeText(sliceText(base, 379, 442));
+    row.guarantee_type = normalizeText(sliceText(base, 442, 468));
+    row.source_code = normalizeText(sliceText(base, 468, 511));
+    row.room_type = normalizeText(sliceText(base, 511, 562));
+    row.cancel_code = joinSlices(block, 562, 620);
+    row.cancel_date = parseMonthDayWithReferenceYear(sliceText(base, 620, 665), referenceDate);
+    row.cancel_clock = joinCompactSlices(block, 665, 730);
+    rows.push(row);
+  }
+
+  const totalLine = detailLines.find((line) => /^Total Cancellations:/i.test(line.text.trim()));
+  if (totalLine) {
+    const row = createChoiceAuditRow(totalLine, reportName, null, "total", totalLine.text.trim());
+    row.metric_name = "Total Cancellations";
+    row.value_1 = normalizeFlexibleNumeric(totalLine.text.split(":")[1] ?? "");
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceCityTaxReportPage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  const monthLabels = extractChoiceCityTaxMonthLabels(page);
+  const note = monthLabels.length > 0
+    ? `${CHOICE_CITY_TAX_NOTE_PREFIX}; month_1=${monthLabels[0] ?? ""}; month_2=${monthLabels[1] ?? ""}; month_3=${monthLabels[2] ?? ""}`
+    : CHOICE_CITY_TAX_NOTE_PREFIX;
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text
+      || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)
+      || text === monthLabels.join(" ")
+      || text.startsWith("Day Tax Adults")) {
+      continue;
+    }
+
+    const day = normalizeText(sliceText(line, 38, 75));
+    if (!day || !/^\d+$/.test(day)) {
+      continue;
+    }
+
+    const row = createChoiceAuditRow(line, reportName, null, "detail", text);
+    row.metric_name = day;
+    setChoiceMetricValues(row, [
+      normalizeFlexibleNumeric(sliceText(line, 75, 120)),
+      normalizeFlexibleNumeric(sliceText(line, 120, 160)),
+      normalizeFlexibleNumeric(sliceText(line, 190, 235)),
+      normalizeFlexibleNumeric(sliceText(line, 235, 270)),
+      normalizeFlexibleNumeric(sliceText(line, 303, 350)),
+      normalizeFlexibleNumeric(sliceText(line, 350, 390))
+    ]);
+    row.note = note;
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceComplimentaryRoomsPage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName) || text === "Code") {
+      continue;
+    }
+
+    const rowKind = isChoiceAuditPacketTotalLine(text) ? "total" : "detail";
+    const row = createChoiceAuditRow(line, reportName, null, rowKind, text);
+    if (rowKind === "total") {
+      row.metric_name = "Total Comps";
+      row.value_1 = normalizeFlexibleNumeric(text.split(":")[1] ?? "");
+    }
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceFinalTransactionCloseoutPage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  let section: string | null = null;
+  let pendingLabel: string[] = [];
+  let unlabeledCount = 0;
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text
+      || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)
+      || text === "Today's"
+      || text === "Today's Totals"
+      || text === "Opening (Include Today's"
+      || text.startsWith("Description (Transaction Code)")) {
+      continue;
+    }
+
+    if (/^Transaction Type:/i.test(text)) {
+      section = text;
+      pendingLabel = [];
+      rows.push(createChoiceAuditRow(line, reportName, section, "section", text));
+      continue;
+    }
+
+    const metric = extractChoiceFlexibleMetricLine(text, 6);
+    if (!metric) {
+      pendingLabel.push(text);
+      continue;
+    }
+
+    const metricName = normalizeText([...pendingLabel, metric.label].filter(Boolean).join(" "));
+    const row = createChoiceAuditRow(
+      line,
+      reportName,
+      section,
+      metricName && /^Total For /i.test(metricName) ? "total" : "detail",
+      buildChoiceMetricLineText(pendingLabel, text)
+    );
+    pendingLabel = [];
+    if (metricName) {
+      row.metric_name = metricName;
+    } else {
+      unlabeledCount += 1;
+      row.metric_name = `Row ${unlabeledCount}`;
+    }
+    const { description, code } = splitChoiceLabelAndCode(row.metric_name);
+    row.transaction_description = description;
+    row.transaction_code = code;
+    setChoiceMetricValues(row, metric.values);
+    row.note = CHOICE_FINAL_TRANSACTION_NOTE;
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceGuestLedgerPage(
+  page: PdfLine[],
+  reportName: string,
+  document: PdfDocumentText
+): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  const referenceDate = extractChoiceAuditPacketBusinessDate(document);
+  let section: string | null = null;
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName) || text.startsWith("Status Name Account Room Arrival Departure Balance")) {
+      continue;
+    }
+
+    if (text === "Guest Accounts" || text === "Group Master Accounts" || text === "In House Accounts" || text === "Guest Ledger Summary") {
+      section = text;
+      rows.push(createChoiceAuditRow(line, reportName, section, "section", text));
+      continue;
+    }
+
+    if (/^Subtotal\b/i.test(text) || /^Total For /i.test(text)) {
+      const row = createChoiceAuditRow(line, reportName, section, "total", text);
+      row.metric_name = normalizeText(text.replace(/:\s*.*$/, ""));
+      row.balance_amount = normalizeFlexibleNumeric(sliceText(line, 517, 620));
+      rows.push(row);
+      continue;
+    }
+
+    const status = normalizeText(sliceText(line, 42, 112));
+    if (!status) {
+      continue;
+    }
+
+    const row = createChoiceAuditRow(line, reportName, section, "detail", text);
+    row.status = status;
+    row.guest_name = normalizeText(sliceText(line, 112, 254));
+    row.account_number = normalizeText(sliceText(line, 254, 322));
+    row.room_number = normalizeText(sliceText(line, 322, 380));
+    row.arrival_date = parseMonthDayWithReferenceYear(sliceText(line, 380, 446), referenceDate);
+    row.departure_date = parseMonthDayWithReferenceYear(sliceText(line, 446, 522), referenceDate);
+    row.balance_amount = normalizeFlexibleNumeric(sliceText(line, 522, 620));
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceHotelJournalDetailPage(
+  page: PdfLine[],
+  reportName: string,
+  document: PdfDocumentText
+): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  const referenceDate = extractChoiceAuditPacketBusinessDate(document);
+  const lines = page.filter((line) => {
+    const text = line.text.trim();
+    return Boolean(text)
+      && !isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)
+      && text !== "ID Account Comment"
+      && !text.startsWith("Date Posting Date User ID");
+  });
+
+  let currentSection: string | null = null;
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const text = line.text.trim();
+
+    if (/^Transaction Code:/i.test(text)) {
+      currentSection = text;
+      rows.push(createChoiceAuditRow(line, reportName, currentSection, "section", text));
+      index += 1;
+      continue;
+    }
+
+    if (/^Total For /i.test(text)) {
+      const row = createChoiceAuditRow(line, reportName, currentSection, "total", text);
+      row.metric_name = normalizeText(text.replace(/:\s*.*$/, ""));
+      row.amount = normalizeFlexibleNumeric(sliceText(line, 613, 664));
+      row.adjustment_amount = normalizeFlexibleNumeric(sliceText(line, 664, 730));
+      const { description, code } = splitChoiceLabelAndCode(currentSection);
+      row.transaction_description = description;
+      row.transaction_code = code;
+      rows.push(row);
+      index += 1;
+      continue;
+    }
+
+    if (looksLikeChoiceJournalDetailStart(line, referenceDate)) {
+      const block = [line];
+      index += 1;
+      while (index < lines.length
+        && !/^Transaction Code:/i.test(lines[index].text.trim())
+        && !/^Total For /i.test(lines[index].text.trim())
+        && !looksLikeChoiceJournalDetailStart(lines[index], referenceDate)) {
+        block.push(lines[index]);
+        index += 1;
+      }
+
+      rows.push(buildChoiceHotelJournalDetailRow(block, reportName, currentSection, referenceDate));
+      continue;
+    }
+
+    const row = createChoiceAuditRow(line, reportName, currentSection, "detail", text);
+    row.metric_name = text;
+    row.note = "journal_subheader";
+    const { description, code } = splitChoiceLabelAndCode(currentSection);
+    row.transaction_description = description;
+    row.transaction_code = code;
+    rows.push(row);
+    index += 1;
+  }
+
+  return rows;
+}
+
+function parseChoiceHotelJournalSummaryPage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text
+      || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)
+      || text.startsWith("Description (Transaction Code)")
+      || text === "*Revenues do not include taxes") {
+      continue;
+    }
+
+    const metric = extractChoiceFlexibleMetricLine(text, 11);
+    if (!metric) {
+      continue;
+    }
+
+    const row = createChoiceAuditRow(
+      line,
+      reportName,
+      null,
+      /^Today's Total:/i.test(text) ? "total" : "detail",
+      text
+    );
+    row.metric_name = metric.label ?? null;
+    const { description, code } = splitChoiceLabelAndCode(row.metric_name);
+    row.transaction_description = description;
+    row.transaction_code = code;
+    setChoiceMetricValues(row, metric.values);
+    row.note = CHOICE_HOTEL_JOURNAL_SUMMARY_NOTE;
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceHotelStatisticsPage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  let section: string | null = null;
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)) {
+      continue;
+    }
+
+    const sectionName = extractChoiceHotelStatisticsSection(text);
+    if (sectionName) {
+      section = sectionName;
+      rows.push(createChoiceAuditRow(line, reportName, section, "section", text));
+      continue;
+    }
+
+    const metric = extractChoiceFlexibleMetricLine(text, 5);
+    if (!metric) {
+      continue;
+    }
+
+    const row = createChoiceAuditRow(line, reportName, section, "detail", text);
+    row.metric_name = metric.label ?? null;
+    setChoiceMetricValues(row, metric.values);
+    row.note = CHOICE_HOTEL_STATISTICS_NOTE;
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceRevenueByRateCodePage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text
+      || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)
+      || text === "YTD"
+      || text.startsWith("Room Room Daily PTD Room PTD Room Room YTD Room YTD")
+      || text.startsWith("Rate Code Nights % Revenue % AVG")) {
+      continue;
+    }
+
+    const metric = extractChoiceFlexibleMetricLine(text, 15);
+    if (!metric) {
+      continue;
+    }
+
+    const row = createChoiceAuditRow(
+      line,
+      reportName,
+      null,
+      metric.label && /^Total/i.test(metric.label) ? "total" : "detail",
+      text
+    );
+    row.metric_name = metric.label ?? null;
+    row.rate_code = metric.label ?? null;
+    setChoiceMetricValues(row, metric.values);
+    row.note = CHOICE_REVENUE_BY_RATE_CODE_NOTE;
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseChoiceTaxExemptReportPage(page: PdfLine[], reportName: string): ChoiceAuditRow[] {
+  const rows: ChoiceAuditRow[] = [];
+  let section: string | null = null;
+
+  for (const line of page) {
+    const text = line.text.trim();
+    if (!text || isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)) {
+      continue;
+    }
+
+    if (text === "Tax Exempt Revenue Summary - By Tax:"
+      || text === "Tax Exempt Revenue Summary - By Transaction Code:"
+      || text === "Tax Refund Revenue Summary - By Transaction Code:") {
+      section = text;
+      rows.push(createChoiceAuditRow(line, reportName, section, "section", text));
+      continue;
+    }
+
+    if (text === "Tax T1 T2 T3 T4"
+      || text === "Transaction Code RM Total Tax Exempt Revenue"
+      || text === "Transaction Code RM Total Refund Revenue") {
+      continue;
+    }
+
+    if (text.startsWith("Current Tax Configuration")) {
+      const row = createChoiceAuditRow(line, reportName, section, "detail", text);
+      row.metric_name = "Current Tax Configuration";
+      setChoiceMetricValues(row, [
+        normalizeFlexibleNumeric(sliceText(line, 283, 320)),
+        normalizeFlexibleNumeric(sliceText(line, 338, 370)),
+        normalizeFlexibleNumeric(sliceText(line, 398, 430)),
+        normalizeFlexibleNumeric(sliceText(line, 463, 520))
+      ]);
+      row.note = "value_1=t1_pct; value_2=t2_pct; value_3=t3_pct; value_4=t4_pct";
+      rows.push(row);
+      continue;
+    }
+
+    if (text === "Total:") {
+      rows.push(createChoiceAuditRow(line, reportName, section, "total", text));
+      continue;
+    }
+
+    const byTaxMatch = text.match(/^(.*?-YTD)\s+(.+)$/);
+    if (byTaxMatch) {
+      const row = createChoiceAuditRow(line, reportName, section, "detail", text);
+      row.metric_name = normalizeText(byTaxMatch[1]);
+      if (section === "Tax Exempt Revenue Summary - By Tax:") {
+        setChoiceMetricValues(row, [
+          normalizeFlexibleNumeric(sliceText(line, 315, 350)),
+          normalizeFlexibleNumeric(sliceText(line, 375, 410)),
+          normalizeFlexibleNumeric(sliceText(line, 440, 475)),
+          normalizeFlexibleNumeric(sliceText(line, 491, 540))
+        ]);
+        row.note = "value_1=t1; value_2=t2; value_3=t3; value_4=t4";
+      } else {
+        setChoiceMetricValues(row, [
+          normalizeFlexibleNumeric(sliceText(line, 392, 430)),
+          normalizeFlexibleNumeric(sliceText(line, 485, 540))
+        ]);
+        row.note = "value_1=transaction_code_amount; value_2=total_amount";
+      }
+      rows.push(row);
+      continue;
+    }
+
+    rows.push(createChoiceAuditRow(line, reportName, section, "detail", text));
+  }
+
+  return rows;
+}
+
+function buildChoiceHotelJournalDetailRow(
+  block: PdfLine[],
+  reportName: string,
+  section: string | null,
+  referenceDate: string | null
+): ChoiceAuditRow {
+  const base = block[0];
+  const row = createChoiceAuditRow(base, reportName, section, "detail", formatChoiceBlockText(block));
+  const postingToken = normalizeText(sliceText(base, 93, 180));
+  const postingParts = postingToken?.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+)$/) ?? null;
+  row.posting_date = postingParts ? parseMonthDayWithReferenceYear(postingParts[1], referenceDate) : null;
+  row.posting_time = postingParts ? normalizeText(postingParts[2]) : null;
+  row.user_id = joinCompactText([sliceText(base, 180, 246), ...block.slice(1).map((line) => sliceText(line, 180, 246))]);
+  row.shift = normalizeText(sliceText(base, 246, 272));
+  row.room_number = normalizeText(sliceText(base, 272, 308));
+  row.account_type = normalizeText(sliceText(base, 308, 380));
+  row.guest_name = normalizeText(sliceText(base, 380, 613));
+  row.amount = normalizeFlexibleNumeric(sliceText(base, 613, 664));
+  row.adjustment_amount = normalizeFlexibleNumeric(sliceText(base, 664, 730));
+  row.reference_id = joinCompactSlices(block.slice(1), 308, 380);
+  row.comment = joinSlices(block.slice(1), 380, 640);
+  const { description, code } = splitChoiceLabelAndCode(section);
+  row.transaction_description = description;
+  row.transaction_code = code;
+  return row;
+}
+
+function createChoiceAuditRow(
+  line: PdfLine,
+  reportName: string,
+  section: string | null,
+  rowKind: string,
+  lineText: string
+): ChoiceAuditRow {
+  return {
+    page_number: String(line.pageNumber),
+    report_name: reportName,
+    section,
+    row_kind: rowKind,
+    line_text: lineText
+  };
+}
+
+function setChoiceMetricValues(row: ChoiceAuditRow, values: Array<string | null | undefined>): void {
+  for (let index = 0; index < values.length; index += 1) {
+    row[`value_${index + 1}`] = values[index] ?? null;
+  }
+}
+
+function extractChoiceFlexibleMetricLine(text: string, maxValues: number): { label: string | null; values: string[] } | null {
+  const normalized = text.replace(/(\d)\s+%/g, "$1%");
+  const tokenPattern = /(^|\s)(\(?-?(?:USD|\$)?\d[\d,]*(?:\.\d+)?\)?-?%?)/g;
+  const tokens = Array.from(normalized.matchAll(tokenPattern)).map((match) => ({
+    index: (match.index ?? 0) + match[1].length,
+    value: match[2]
+  }));
+  if (tokens.length === 0 || tokens.length > maxValues) {
+    return null;
+  }
+
+  const label = normalizeText(normalized.slice(0, tokens[0].index));
+  const values = tokens.map((token) => normalizeFlexibleNumeric(token.value) ?? token.value);
+  return { label, values };
+}
+
+function splitChoiceLabelAndCode(value: string | null | undefined): { description: string | null; code: string | null } {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return { description: null, code: null };
+  }
+
+  const stripped = normalized.replace(/^Transaction (?:Type|Code):\s*/i, "");
+  const match = stripped.match(/^(.*?)(?:\s*\(([A-Za-z0-9/-]+)\))?$/);
+  if (!match) {
+    return { description: stripped, code: null };
+  }
+
+  return {
+    description: normalizeText(match[1]),
+    code: normalizeText(match[2] ?? null)
+  };
+}
+
+function extractChoiceCityTaxMonthLabels(page: PdfLine[]): string[] {
+  const monthLine = page.find((line) => line.items.length === 3 && line.items.every((item) => /^[A-Z][a-z]+$/.test(item.text)));
+  return monthLine?.items.map((item) => item.text) ?? [];
+}
+
+function extractChoiceHotelStatisticsSection(text: string): string | null {
+  for (const section of HOTEL_STATISTICS_SECTIONS) {
+    if (text.startsWith(section)) {
+      return section;
+    }
+  }
+
+  return null;
+}
+
+function looksLikeChoiceJournalDetailStart(line: PdfLine, referenceDate: string | null): boolean {
+  return Boolean(parseMonthDayWithReferenceYear(sliceText(line, 38, 90), referenceDate));
+}
+
+function formatChoiceBlockText(lines: PdfLine[]): string {
+  return lines
+    .map((line) => line.text.trim())
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function buildChoiceMetricLineText(pendingLabel: string[], text: string): string {
+  return [...pendingLabel, text].filter(Boolean).join(" | ");
+}
+
+function isChoiceAuditPacketCommonHeaderOrFooter(text: string, reportName: string): boolean {
+  return text === reportName
+    || /^Property Name:/i.test(text)
+    || /^Business Date:/i.test(text)
+    || /^Date Range:/i.test(text)
+    || /^Date\/Time of Printing:/i.test(text)
+    || /^Data Complete as of:/i.test(text)
+    || /^Software Version:/i.test(text)
+    || /^Page \d+ of \d+/i.test(text);
 }
 
 function parseAllNightAuditReport(document: PdfDocumentText): Array<Record<string, string | null>> {
@@ -1458,14 +2228,7 @@ function extractChoiceAuditPacketPageTitle(lines: PdfLine[]): string | null {
 }
 
 function isChoiceAuditPacketHeaderOrFooter(text: string, reportName: string): boolean {
-  return text === reportName
-    || /^Property Name:/i.test(text)
-    || /^Business Date:/i.test(text)
-    || /^Date Range:/i.test(text)
-    || /^Date\/Time of Printing:/i.test(text)
-    || /^Data Complete as of:/i.test(text)
-    || /^Software Version:/i.test(text)
-    || /^Page \d+ of \d+/i.test(text)
+  return isChoiceAuditPacketCommonHeaderOrFooter(text, reportName)
     || text.startsWith("Account Name Current")
     || text.startsWith("Status Name Account Arrival Balance")
     || text.startsWith("Account Guest Name Arrival Nights")
@@ -1494,7 +2257,8 @@ function isChoiceAuditPacketSectionLine(text: string): boolean {
     || text === "Guest Ledger Summary"
     || text === "No Show Revenue"
     || text === "Tax Exempt Revenue Summary - By Tax:"
-    || /^Transaction Type:/i.test(text);
+    || /^Transaction Type:/i.test(text)
+    || /^Transaction Code:/i.test(text);
 }
 
 function isChoiceAuditPacketTotalLine(text: string): boolean {

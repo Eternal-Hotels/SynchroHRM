@@ -328,9 +328,14 @@ export class AppDatabase {
     this.ensureColumn("ingest_runs", "attachments_not_approved", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("export_history", "property_name", "TEXT");
     this.ensureColumn("export_history", "property_slug", "TEXT");
-    for (const reportType of Object.keys(REPORT_COLUMN_MAP)) {
-      this.ensureColumn(reportType, "property_name", "TEXT");
-      this.ensureColumn(reportType, "property_slug", "TEXT");
+    for (const [reportType, columns] of Object.entries(REPORT_COLUMN_MAP)) {
+      for (const column of columns) {
+        if (column === "ingest_run_id") {
+          continue;
+        }
+
+        this.ensureColumn(reportType, column, "TEXT");
+      }
     }
   }
 
