@@ -1,19 +1,57 @@
 import { randomUUID } from "node:crypto";
 import type { AppDatabase } from "../db/Database.js";
-import { REPORT_TITLES } from "../reports.js";
-import type { ReportType } from "../types.js";
+import { COMMON_EXPORT_COLUMNS, REPORT_COLUMN_MAP, REPORT_TITLES } from "../reports.js";
+import { REPORT_TYPES, type ReportType } from "../types.js";
 import { NetSuiteConnectionService, NetSuiteSettingsError } from "./NetSuiteConnectionService.js";
 
-const SUPPORTED_MONETARY_REPORT_TYPES = [
-  "all_transaction_rows",
-  "best_western_daily_report_rows",
-  "closed_folio_balance_rows",
-  "direct_bill_aging_rows",
-  "tax_report_rows",
-  "trial_balance_report_rows"
-] as const satisfies readonly ReportType[];
+const SUPPORTED_NETSUITE_REPORT_TYPES = REPORT_TYPES;
+const GROUP_CONTEXT_FIELDS = [
+  "report_name",
+  "section",
+  "subsection",
+  "group_name",
+  "account_type",
+  "period",
+  "maintenance_type",
+  "transaction_scope",
+  "transaction_type",
+  "charge_type",
+  "day_of_week"
+] as const;
+const ITEM_CONTEXT_FIELDS = [
+  "metric_name",
+  "summary_label",
+  "business_date",
+  "date_value",
+  "booking_date",
+  "made_on_date",
+  "arrival_date",
+  "departure_date",
+  "check_in_date",
+  "check_out_date",
+  "stay_date",
+  "due_date",
+  "post_date",
+  "company_name",
+  "company_code",
+  "guest_name",
+  "guest_or_group_name",
+  "group_code",
+  "payment_method",
+  "room_type",
+  "rate_plan",
+  "rate_plan_name",
+  "reason",
+  "tax_name",
+  "posting_code",
+  "posting_description",
+  "transaction_code",
+  "transaction_description",
+  "line_text"
+] as const;
+const CONTEXT_FIELD_LIMIT = 4;
 
-type SupportedMonetaryReportType = (typeof SUPPORTED_MONETARY_REPORT_TYPES)[number];
+type SupportedMonetaryReportType = ReportType;
 type PostingPolarity = "debit_positive" | "credit_positive";
 
 interface SupportedAttachmentSummary {
@@ -132,241 +170,6 @@ interface MonetaryWorkspacePayload {
   runs: Array<Record<string, unknown>>;
 }
 
-interface ReportDefinition {
-  reportType: SupportedMonetaryReportType;
-  discover(rows: Array<Record<string, unknown>>, attachment: SupportedAttachmentSummary): DiscoveredMonetaryItem[];
-}
-
-const REPORT_DEFINITIONS: Record<SupportedMonetaryReportType, ReportDefinition> = {
-  all_transaction_rows: {
-    reportType: "all_transaction_rows",
-    discover(rows, attachment) {
-      return aggregateMonetaryItems(rows, (row) => {
-        const amount = parseAmount(row.amount);
-        if (amount === null) {
-          return null;
-        }
-
-        const transactionCode = normalizeWhitespace(row.transaction_code);
-        const transactionDescription = normalizeWhitespace(row.transaction_description);
-        if (!transactionCode && !transactionDescription) {
-          return null;
-        }
-
-        const section = normalizeWhitespace(row.section) || "Transactions";
-        const transactionType = normalizeWhitespace(row.transaction_type);
-        const chargeType = normalizeWhitespace(row.charge_type);
-        const groupLabel = [section, transactionType, chargeType].filter(Boolean).join(" / ");
-        const itemLabel = [transactionCode, transactionDescription].filter(Boolean).join(" ");
-
-        return {
-          mappingKey: buildMappingKey(attachment.reportType, "amount", [
-            section,
-            transactionType,
-            chargeType,
-            transactionCode,
-            transactionDescription
-          ]),
-          groupLabel,
-          itemLabel: itemLabel || "Transaction",
-          amountField: "amount",
-          amountFieldLabel: "Amount",
-          defaultPostingPolarity: inferTransactionPolarity(transactionType, transactionDescription, chargeType),
-          amount
-        };
-      }, attachment);
-    }
-  },
-  best_western_daily_report_rows: {
-    reportType: "best_western_daily_report_rows",
-    discover(rows, attachment) {
-      return aggregateMonetaryItems(rows, (row) => {
-        const postingCode = normalizeWhitespace(row.posting_code);
-        const postingDescription = normalizeWhitespace(row.posting_description);
-        if (!postingCode && !postingDescription) {
-          return null;
-        }
-
-        const amount = parseAmount(row.today_value);
-        if (amount === null) {
-          return null;
-        }
-
-        const section = normalizeWhitespace(row.section) || "Daily Report";
-        const subsection = normalizeWhitespace(row.subsection);
-        const groupName = normalizeWhitespace(row.group_name);
-        const metricName = normalizeWhitespace(row.metric_name);
-        const itemLabel = [postingCode, postingDescription || metricName].filter(Boolean).join(" ");
-
-        return {
-          mappingKey: buildMappingKey(attachment.reportType, "today_value", [
-            section,
-            subsection,
-            groupName,
-            postingCode,
-            postingDescription,
-            metricName
-          ]),
-          groupLabel: [section, subsection, groupName].filter(Boolean).join(" / ") || section,
-          itemLabel: itemLabel || "Posting Row",
-          amountField: "today_value",
-          amountFieldLabel: "Today Value",
-          defaultPostingPolarity: inferSectionPolarity(section, "credit_positive"),
-          amount
-        };
-      }, attachment);
-    }
-  },
-  closed_folio_balance_rows: {
-    reportType: "closed_folio_balance_rows",
-    discover(rows, attachment) {
-      const items: DiscoveredMonetaryItem[] = [];
-      items.push(...aggregateMonetaryItems(rows, (row) => {
-        const amount = parseAmount(row.net_change);
-        if (amount === null) {
-          return null;
-        }
-
-        const section = normalizeWhitespace(row.section) || "Closed Folio Balances";
-        const summaryLabel = normalizeWhitespace(row.summary_label);
-        const guestName = normalizeWhitespace(row.guest_name);
-        const companyName = normalizeWhitespace(row.company_name);
-        const rowKind = normalizeWhitespace(row.row_kind);
-        const itemLabel = summaryLabel || guestName || companyName;
-        if (!itemLabel) {
-          return null;
-        }
-
-        return {
-          mappingKey: buildMappingKey(attachment.reportType, "net_change", [
-            section,
-            rowKind,
-            summaryLabel,
-            guestName,
-            companyName
-          ]),
-          groupLabel: section,
-          itemLabel,
-          amountField: "net_change",
-          amountFieldLabel: "Net Change",
-          defaultPostingPolarity: "debit_positive",
-          amount
-        };
-      }, attachment));
-      items.push(...aggregateMonetaryItems(rows, (row) => {
-        const amount = parseAmount(row.metric_value);
-        if (amount === null) {
-          return null;
-        }
-
-        const section = normalizeWhitespace(row.section) || "Closed Folio Balances";
-        const summaryLabel = normalizeWhitespace(row.summary_label);
-        if (!summaryLabel) {
-          return null;
-        }
-
-        return {
-          mappingKey: buildMappingKey(attachment.reportType, "metric_value", [section, summaryLabel]),
-          groupLabel: section,
-          itemLabel: summaryLabel,
-          amountField: "metric_value",
-          amountFieldLabel: "Metric Value",
-          defaultPostingPolarity: "debit_positive",
-          amount
-        };
-      }, attachment));
-      return items.sort(compareDiscoveredItems);
-    }
-  },
-  direct_bill_aging_rows: {
-    reportType: "direct_bill_aging_rows",
-    discover(rows, attachment) {
-      return aggregateMonetaryItems(rows, (row) => {
-        const amount = parseAmount(row.total_amount);
-        if (amount === null) {
-          return null;
-        }
-
-        const section = normalizeWhitespace(row.section) || "Direct Bill Aging";
-        const companyCode = normalizeWhitespace(row.company_code);
-        const companyName = normalizeWhitespace(row.company_name);
-        if (!companyCode && !companyName) {
-          return null;
-        }
-
-        return {
-          mappingKey: buildMappingKey(attachment.reportType, "total_amount", [section, companyCode, companyName]),
-          groupLabel: section,
-          itemLabel: [companyCode, companyName].filter(Boolean).join(" "),
-          amountField: "total_amount",
-          amountFieldLabel: "Total Amount",
-          defaultPostingPolarity: "debit_positive",
-          amount
-        };
-      }, attachment);
-    }
-  },
-  tax_report_rows: {
-    reportType: "tax_report_rows",
-    discover(rows, attachment) {
-      return aggregateMonetaryItems(rows, (row) => {
-        const amount = parseAmount(row.payable_tax);
-        if (amount === null) {
-          return null;
-        }
-
-        const taxName = normalizeWhitespace(row.tax_name);
-        if (!taxName) {
-          return null;
-        }
-
-        const section = normalizeWhitespace(row.section) || "Tax Report";
-        return {
-          mappingKey: buildMappingKey(attachment.reportType, "payable_tax", [section, taxName]),
-          groupLabel: section,
-          itemLabel: taxName,
-          amountField: "payable_tax",
-          amountFieldLabel: "Payable Tax",
-          defaultPostingPolarity: "credit_positive",
-          amount
-        };
-      }, attachment);
-    }
-  },
-  trial_balance_report_rows: {
-    reportType: "trial_balance_report_rows",
-    discover(rows, attachment) {
-      return aggregateMonetaryItems(rows, (row) => {
-        const amount = parseAmount(row.net_change);
-        if (amount === null) {
-          return null;
-        }
-
-        const accountType = normalizeWhitespace(row.account_type);
-        const accountName = normalizeWhitespace(row.account_name);
-        const transactionCode = normalizeWhitespace(row.transaction_code);
-        const rowKind = normalizeWhitespace(row.row_kind);
-        if (rowKind && rowKind !== "detail") {
-          return null;
-        }
-        if (!accountName && !transactionCode) {
-          return null;
-        }
-
-        return {
-          mappingKey: buildMappingKey(attachment.reportType, "net_change", [accountType, transactionCode, accountName]),
-          groupLabel: accountType || "Trial Balance",
-          itemLabel: [transactionCode, accountName].filter(Boolean).join(" "),
-          amountField: "net_change",
-          amountFieldLabel: "Net Change",
-          defaultPostingPolarity: inferTrialBalancePolarity(accountType),
-          amount
-        };
-      }, attachment);
-    }
-  }
-};
-
 export class NetSuitePostingError extends Error {
   constructor(
     message: string,
@@ -384,7 +187,7 @@ export class NetSuitePostingService {
   ) {}
 
   listProperties(): Array<Record<string, unknown>> {
-    const summaries = this.database.listNetSuitePostingPropertySummaries([...SUPPORTED_MONETARY_REPORT_TYPES]);
+    const summaries = this.database.listNetSuitePostingPropertySummaries([...SUPPORTED_NETSUITE_REPORT_TYPES]);
     return summaries.map((entry) => ({
       ...entry,
       supportedReportTypes: buildSupportedReportTypeSummaries(
@@ -524,7 +327,7 @@ export class NetSuitePostingService {
     }
 
     if (preview.summary.postable !== true) {
-      throw new NetSuitePostingError("Only a balanced preview can be submitted to NetSuite.");
+      throw new NetSuitePostingError("Only a preview without blocking validation errors can be submitted to NetSuite.");
     }
 
     const uniqueGlCodes = Array.from(new Set(
@@ -631,7 +434,7 @@ export class NetSuitePostingService {
     const attachment = this.listSupportedAttachments(propertySlug)
       .find((entry) => entry.attachmentId === attachmentId);
     if (!attachment) {
-      throw new NetSuitePostingError(`Supported monetary attachment ${attachmentId} was not found for ${propertySlug}.`, 404);
+      throw new NetSuitePostingError(`Supported parsed attachment ${attachmentId} was not found for ${propertySlug}.`, 404);
     }
 
     return attachment;
@@ -639,8 +442,7 @@ export class NetSuitePostingService {
 
   private discoverItemsForAttachment(attachment: SupportedAttachmentSummary): DiscoveredMonetaryItem[] {
     const rows = this.database.getAttachmentExportRows(attachment.reportType, attachment.attachmentId);
-    const definition = REPORT_DEFINITIONS[attachment.reportType];
-    return definition.discover(rows, attachment).sort(compareDiscoveredItems);
+    return discoverAllPostingItems(rows, attachment);
   }
 
   private persistSetup(
@@ -816,7 +618,7 @@ function buildPostingPreview(
       validations.push({
         level: "error",
         code: "missing_gl_code",
-        message: `Missing NetSuite GL code for ${String(mapping.itemLabel || "this monetary item")}.`,
+        message: `Missing NetSuite GL code for ${String(mapping.itemLabel || "this report line")}.`,
         mappingKey: String(mapping.mappingKey || "")
       });
       continue;
@@ -837,38 +639,20 @@ function buildPostingPreview(
   }
 
   let balanceDifference = roundMoney(debitTotal - creditTotal);
-  if (balanceDifference !== 0) {
-    const balancingGlCode = normalizeWhitespace(defaults.balancingGlCode);
-    if (balancingGlCode) {
-      const balancingPolarity: PostingPolarity = balanceDifference > 0 ? "credit_positive" : "debit_positive";
-      const balancingLine = buildPostingLine({
-        mappingKey: "balancing_gl_code",
-        groupLabel: "Balancing",
-        itemLabel: "Balancing Line",
-        amountField: "balancing_gl_code",
-        amountFieldLabel: "Balancing GL Code",
-        glCode: balancingGlCode,
-        postingPolarity: balancingPolarity
-      }, Math.abs(balanceDifference));
-      lines.push(balancingLine);
-      debitTotal += parseAmount(balancingLine.debit) ?? 0;
-      creditTotal += parseAmount(balancingLine.credit) ?? 0;
-      balanceDifference = roundMoney(debitTotal - creditTotal);
-    } else {
-      validations.push({
-        level: "error",
-        code: "missing_balancing_gl_code",
-        message: `Preview needs a balancing GL code because it is off by ${formatMoney(balanceDifference)}.`,
-        mappingKey: "balancing_gl_code"
-      });
-    }
-  }
-
   if (lines.length === 0) {
     validations.push({
       level: "warning",
       code: "no_posting_lines",
-      message: "No non-zero monetary rows were available for this attachment.",
+      message: "No non-zero statistical values were available for this attachment.",
+      mappingKey: ""
+    });
+  }
+
+  if (balanceDifference !== 0) {
+    validations.push({
+      level: "warning",
+      code: "unbalanced_preview",
+      message: `Preview does not balance and balancing is currently disabled. Difference: ${formatMoney(balanceDifference)}.`,
       mappingKey: ""
     });
   }
@@ -905,7 +689,7 @@ function buildPostingPreview(
       debitTotal: formatMoney(debitTotal),
       creditTotal: formatMoney(creditTotal),
       balanceDifference: formatMoney(balanceDifference),
-      postable: validations.every((validation) => validation.level !== "error") && balanceDifference === 0
+      postable: validations.every((validation) => validation.level !== "error")
     },
     validations,
     lines
@@ -960,33 +744,174 @@ function buildJournalEntryRecord(
   return record;
 }
 
-function aggregateMonetaryItems(
+function discoverAllPostingItems(
   rows: Array<Record<string, unknown>>,
-  buildCandidate: (row: Record<string, unknown>) => Omit<DiscoveredMonetaryItem, "reportType" | "reportTitle"> | null,
   attachment: SupportedAttachmentSummary
 ): DiscoveredMonetaryItem[] {
   const byKey = new Map<string, DiscoveredMonetaryItem>();
+
   for (const row of rows) {
-    const candidate = buildCandidate(row);
-    if (!candidate) {
-      continue;
-    }
+    for (const candidate of buildPostingItemCandidates(row, attachment)) {
+      const existing = byKey.get(candidate.mappingKey);
+      if (existing) {
+        existing.amount = roundMoney(existing.amount + candidate.amount);
+        continue;
+      }
 
-    const existing = byKey.get(candidate.mappingKey);
-    if (existing) {
-      existing.amount = roundMoney(existing.amount + candidate.amount);
-      continue;
+      byKey.set(candidate.mappingKey, {
+        ...candidate,
+        reportType: attachment.reportType,
+        reportTitle: attachment.reportTitle,
+        amount: roundMoney(candidate.amount)
+      });
     }
-
-    byKey.set(candidate.mappingKey, {
-      ...candidate,
-      reportType: attachment.reportType,
-      reportTitle: attachment.reportTitle,
-      amount: roundMoney(candidate.amount)
-    });
   }
 
   return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
+function buildPostingItemCandidates(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): Array<Omit<DiscoveredMonetaryItem, "reportType" | "reportTitle">> {
+  const groupLabel = buildPostingGroupLabel(row, attachment);
+  const itemLabel = buildPostingItemLabel(row, attachment);
+  const identityParts = buildPostingIdentityParts(row, attachment);
+
+  return REPORT_COLUMN_MAP[attachment.reportType]
+    .filter((field) => !COMMON_EXPORT_COLUMNS.includes(field as (typeof COMMON_EXPORT_COLUMNS)[number]))
+    .filter((field) => shouldTreatAsMetricField(field))
+    .map((field) => {
+      const amount = parseAmount(row[field]);
+      if (amount === null) {
+        return null;
+      }
+
+      return {
+        mappingKey: buildMappingKey(attachment.reportType, field, identityParts),
+        groupLabel,
+        itemLabel,
+        amountField: field,
+        amountFieldLabel: humanizeFieldLabel(field),
+        defaultPostingPolarity: inferMetricPolarity(field, groupLabel, itemLabel),
+        amount
+      } satisfies Omit<DiscoveredMonetaryItem, "reportType" | "reportTitle">;
+    })
+    .filter((candidate): candidate is Omit<DiscoveredMonetaryItem, "reportType" | "reportTitle"> => candidate !== null);
+}
+
+function buildPostingGroupLabel(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): string {
+  const prioritized = pickContextValues(row, GROUP_CONTEXT_FIELDS, 3);
+  if (prioritized.length > 0) {
+    return prioritized.join(" / ");
+  }
+
+  return attachment.reportTitle || REPORT_TITLES[attachment.reportType] || humanizeFieldLabel(attachment.reportType);
+}
+
+function buildPostingItemLabel(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): string {
+  const prioritized = pickContextValues(row, ITEM_CONTEXT_FIELDS, CONTEXT_FIELD_LIMIT);
+  if (prioritized.length > 0) {
+    return prioritized.join(" / ");
+  }
+
+  const fallback = Object.entries(row)
+    .filter(([field]) => !COMMON_EXPORT_COLUMNS.includes(field as (typeof COMMON_EXPORT_COLUMNS)[number]))
+    .filter(([field]) => !shouldTreatAsMetricField(field))
+    .map(([field, value]) => formatContextValue(field, value))
+    .filter(Boolean)
+    .slice(0, CONTEXT_FIELD_LIMIT);
+
+  if (fallback.length > 0) {
+    return fallback.join(" / ");
+  }
+
+  return attachment.attachmentName || attachment.reportTitle || "Report Row";
+}
+
+function buildPostingIdentityParts(
+  row: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary
+): string[] {
+  const parts = Object.entries(row)
+    .filter(([field]) => !COMMON_EXPORT_COLUMNS.includes(field as (typeof COMMON_EXPORT_COLUMNS)[number]))
+    .map(([field, value]) => {
+      if (shouldTreatAsMetricField(field)) {
+        return "";
+      }
+
+      return formatContextValue(field, value);
+    })
+    .filter(Boolean);
+
+  return parts.length > 0 ? parts : [attachment.reportTitle || attachment.attachmentName || attachment.reportType];
+}
+
+function pickContextValues(
+  row: Record<string, unknown>,
+  preferredFields: readonly string[],
+  limit: number
+): string[] {
+  const values: string[] = [];
+  const seen = new Set<string>();
+
+  for (const field of preferredFields) {
+    const formatted = formatContextValue(field, row[field]);
+    if (!formatted || seen.has(formatted)) {
+      continue;
+    }
+
+    values.push(formatted);
+    seen.add(formatted);
+    if (values.length >= limit) {
+      return values;
+    }
+  }
+
+  return values;
+}
+
+function formatContextValue(field: string, value: unknown): string {
+  const text = normalizeWhitespace(value);
+  if (!text) {
+    return "";
+  }
+
+  if (COMMON_EXPORT_COLUMNS.includes(field as (typeof COMMON_EXPORT_COLUMNS)[number])) {
+    return "";
+  }
+
+  if (["section", "subsection", "group_name", "report_name", "metric_name", "summary_label"].includes(field)) {
+    return text;
+  }
+
+  return `${humanizeFieldLabel(field)}: ${text}`;
+}
+
+function shouldTreatAsMetricField(field: string): boolean {
+  if (COMMON_EXPORT_COLUMNS.includes(field as (typeof COMMON_EXPORT_COLUMNS)[number])) {
+    return false;
+  }
+
+  if (["section", "subsection", "group_name", "report_name", "metric_name", "summary_label", "row_kind", "line_text", "note"].includes(field)) {
+    return false;
+  }
+
+  if (/_date$|_time$|_name$|_code$|_type$|_status$|_method$|_plan$|_flag$|_user$|_by$/.test(field)) {
+    return false;
+  }
+
+  if (/(^|_)(id|no|number|fragment)$/.test(field)) {
+    return false;
+  }
+
+  return true;
 }
 
 function buildPostingLine(
@@ -1103,7 +1028,7 @@ function parseAmount(value: unknown): number | null {
 
   const negative = raw.startsWith("(") && raw.endsWith(")");
   const cleaned = raw
-    .replace(/[,$]/g, "")
+    .replace(/[$,%]/g, "")
     .replace(/[()]/g, "")
     .replace(/^\+/, "");
   if (!/^-?\d+(?:\.\d+)?$/.test(cleaned)) {
@@ -1175,7 +1100,7 @@ function buildSupportedReportTypeSummaries(
 }
 
 function normalizeSupportedReportType(value: unknown): SupportedMonetaryReportType | null {
-  return SUPPORTED_MONETARY_REPORT_TYPES.includes(value as SupportedMonetaryReportType)
+  return SUPPORTED_NETSUITE_REPORT_TYPES.includes(value as SupportedMonetaryReportType)
     ? value as SupportedMonetaryReportType
     : null;
 }
@@ -1188,35 +1113,25 @@ function normalizePostingPolarity(value: unknown): PostingPolarity | null {
   return null;
 }
 
-function inferTransactionPolarity(
-  transactionType: string,
-  transactionDescription: string,
-  chargeType: string
-): PostingPolarity {
-  const text = [transactionType, transactionDescription, chargeType].join(" ").toLowerCase();
-  if (/(payment|refund|reversal|deposit|credit card|cash|check|advance)/.test(text)) {
-    return "debit_positive";
-  }
-  return "credit_positive";
+function humanizeFieldLabel(field: string): string {
+  return field
+    .replace(/_/g, " ")
+    .replace(/\bpct\b/gi, "Pct")
+    .replace(/\badr\b/g, "ADR")
+    .replace(/\booo\b/gi, "OOO")
+    .replace(/\bytd\b/gi, "YTD")
+    .replace(/\bmtd\b/gi, "MTD")
+    .replace(/\bdb\b/gi, "DB")
+    .replace(/\b(ar|gl)\b/gi, (match) => match.toUpperCase())
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
-function inferTrialBalancePolarity(accountType: string): PostingPolarity {
-  const normalized = accountType.toLowerCase();
-  if (/(asset|expense|receivable)/.test(normalized)) {
-    return "debit_positive";
-  }
-  return "credit_positive";
-}
-
-function inferSectionPolarity(section: string, fallback: PostingPolarity): PostingPolarity {
-  const normalized = section.toLowerCase();
-  if (/(expense|paid out|refund|receivable|balance)/.test(normalized)) {
-    return "debit_positive";
-  }
-  if (/(revenue|tax|sales|deposit)/.test(normalized)) {
+function inferMetricPolarity(field: string, groupLabel: string, itemLabel: string): PostingPolarity {
+  const text = [field, groupLabel, itemLabel].join(" ").toLowerCase();
+  if (/(revenue|sales|tax|credit|deposit|payable|closing balance|ending balance|refund \$|discount \$)/.test(text)) {
     return "credit_positive";
   }
-  return fallback;
+  return "debit_positive";
 }
 
 function compareDiscoveredItems(left: DiscoveredMonetaryItem, right: DiscoveredMonetaryItem): number {
@@ -1228,4 +1143,4 @@ function compareDiscoveredItems(left: DiscoveredMonetaryItem, right: DiscoveredM
   ].find((value) => value !== 0) ?? 0;
 }
 
-export { SUPPORTED_MONETARY_REPORT_TYPES };
+export { SUPPORTED_NETSUITE_REPORT_TYPES };

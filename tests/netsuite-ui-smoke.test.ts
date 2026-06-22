@@ -27,12 +27,13 @@ test("admin NetSuite settings UI wires the expected fields and endpoints", async
   }
 
   assert.match(html, /NetSuite Connector/);
-  assert.match(html, /NetSuite Monetary Posting/);
-  assert.match(html, /Phase 1: Monetary items/);
+  assert.match(html, /NetSuite Statistical GL Workspace/);
+  assert.match(html, /Phase 1: Statistical lines/);
   assert.match(html, /Test Connection/);
   assert.match(html, /Export Metadata Catalog CSV/);
   assert.match(html, /Clear Saved Key/);
   assert.match(html, /id="netsuite-property-list"/);
+  assert.match(html, /id="netsuite-report-type-select"/);
   assert.match(html, /id="netsuite-attachment-select"/);
   assert.match(html, /id="netsuite-posting-balancing-gl"/);
   assert.match(html, /id="netsuite-posting-preview-button"/);
@@ -45,5 +46,5 @@ test("admin NetSuite settings UI wires the expected fields and endpoints", async
   assert.match(client, /\/api\/netsuite\/properties\/.*\/runs\/.*\/submit/);
   assert.match(html, /\/api\/settings\/netsuite\/debug\/metadata-catalog\/latest/);
   assert.doesNotMatch(viewer, /NetSuite Connector/);
-  assert.doesNotMatch(viewer, /NetSuite Monetary Posting/);
+  assert.doesNotMatch(viewer, /NetSuite Statistical GL Workspace/);
 });

@@ -414,7 +414,7 @@ test("NetSuite posting routes stay admin-only", async () => {
   }
 });
 
-test("NetSuite posting workspace discovers monetary rows, saves setup, builds a balanced preview, and submits it", async () => {
+test("NetSuite posting workspace discovers broad report metrics, builds previews without balancing, and submits them", async () => {
   let requestCount = 0;
   const context = await createRouteTestContext({
     fetchImpl: async (input) => {
@@ -492,6 +492,37 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
     seedParsedAttachment(context.database, {
       propertyName: "Holiday Inn Express Pendleton",
       propertySlug: "holiday-inn-express-pendleton",
+      reportType: "history_forecast_rows",
+      reportTitle: "History and Forecast",
+      reportDate: "2026-05-23",
+      attachmentName: "history-forecast.pdf",
+      rows: [
+        {
+          business_date: "2026-05-23",
+          section: "Forecast",
+          day_of_week: "Friday",
+          total_occ: "52",
+          arrivals: "14",
+          comp_rooms: "1",
+          house_use_rooms: "0",
+          deduct_indiv_rooms: "2",
+          non_deduct_indiv_rooms: "0",
+          deduct_group_rooms: "0",
+          non_deduct_group_rooms: "0",
+          occupancy_pct: "86.7%",
+          room_revenue: "$7,850.12",
+          average_rate: "$150.96",
+          departures: "8",
+          day_use_rooms: "0",
+          no_show_rooms: "1",
+          ooo_rooms: "3",
+          in_house_people: "89"
+        }
+      ]
+    });
+    seedParsedAttachment(context.database, {
+      propertyName: "Holiday Inn Express Pendleton",
+      propertySlug: "holiday-inn-express-pendleton",
       reportType: "closed_folio_balance_rows",
       reportTitle: "Closed Folio Balances",
       reportDate: "2026-05-21",
@@ -520,7 +551,7 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
     assert.equal(listPayload.properties[0]?.property_slug, "holiday-inn-express-pendleton");
     assert.deepEqual(
       (listPayload.properties[0]?.supportedReportTypes as Array<Record<string, unknown>>).map((entry) => entry.reportType),
-      ["all_transaction_rows", "closed_folio_balance_rows"]
+      ["all_transaction_rows", "closed_folio_balance_rows", "history_forecast_rows"]
     );
 
     const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?attachmentId=${attachmentRecordId}`, {
@@ -531,7 +562,12 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
     assert.equal((workspacePayload.selectedAttachment as Record<string, unknown>).attachmentId, attachmentRecordId);
     assert.equal(Array.isArray(workspacePayload.mappings), true);
     assert.equal((workspacePayload.mappings as Array<Record<string, unknown>>).length, 2);
-    assert.equal((workspacePayload.discoverySummary as Record<string, unknown>).supportedReportTypeCount, 2);
+    assert.equal((workspacePayload.discoverySummary as Record<string, unknown>).supportedReportTypeCount, 3);
+    const discoveredMappings = workspacePayload.mappings as Array<Record<string, unknown>>;
+    const chargeMapping = discoveredMappings.find((entry) => String(entry.itemLabel || "").includes("Transaction Code: RR"));
+    const taxMapping = discoveredMappings.find((entry) => String(entry.itemLabel || "").includes("Transaction Code: CT"));
+    assert.ok(chargeMapping);
+    assert.ok(taxMapping);
 
     const filteredWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?reportType=closed_folio_balance_rows`, {
       headers: { cookie: adminCookie }
@@ -540,7 +576,16 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
     const filteredWorkspacePayload = await filteredWorkspaceResponse.json() as Record<string, unknown>;
     assert.equal(filteredWorkspacePayload.selectedReportType, "closed_folio_balance_rows");
     assert.equal((filteredWorkspacePayload.selectedAttachment as Record<string, unknown>).reportType, "closed_folio_balance_rows");
-    assert.equal((filteredWorkspacePayload.availableReportTypes as Array<Record<string, unknown>>).length, 2);
+    assert.equal((filteredWorkspacePayload.availableReportTypes as Array<Record<string, unknown>>).length, 3);
+
+    const statisticalWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?reportType=history_forecast_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(statisticalWorkspaceResponse.status, 200);
+    const statisticalWorkspacePayload = await statisticalWorkspaceResponse.json() as Record<string, unknown>;
+    assert.equal(statisticalWorkspacePayload.selectedReportType, "history_forecast_rows");
+    assert.ok((statisticalWorkspacePayload.mappings as Array<Record<string, unknown>>).some((entry) => entry.amountField === "total_occ"));
+    assert.ok((statisticalWorkspacePayload.mappings as Array<Record<string, unknown>>).some((entry) => entry.amountField === "room_revenue"));
 
     const saveResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton`, {
       method: "PUT",
@@ -552,12 +597,12 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
         attachmentId: attachmentRecordId,
         mappings: [
           {
-            mappingKey: "all_transaction_rows:amount:reservations:charge:room:rr:guest",
+            mappingKey: String(chargeMapping?.mappingKey || ""),
             netsuiteGlCode: "4000",
             postingPolarity: "credit_positive"
           },
           {
-            mappingKey: "all_transaction_rows:amount:reservations:tax:room:ct:city_tax",
+            mappingKey: String(taxMapping?.mappingKey || ""),
             netsuiteGlCode: "2100",
             postingPolarity: "credit_positive"
           }
@@ -585,12 +630,12 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
         attachmentId: attachmentRecordId,
         mappings: [
           {
-            mappingKey: "all_transaction_rows:amount:reservations:charge:room:rr:guest",
+            mappingKey: String(chargeMapping?.mappingKey || ""),
             netsuiteGlCode: "4000",
             postingPolarity: "credit_positive"
           },
           {
-            mappingKey: "all_transaction_rows:amount:reservations:tax:room:ct:city_tax",
+            mappingKey: String(taxMapping?.mappingKey || ""),
             netsuiteGlCode: "2100",
             postingPolarity: "credit_positive"
           }
@@ -612,7 +657,8 @@ test("NetSuite posting workspace discovers monetary rows, saves setup, builds a 
     const previewRunPayload = previewPayload.run.previewPayload as Record<string, unknown>;
     const previewSummary = previewRunPayload.summary as Record<string, unknown>;
     assert.equal(previewSummary.postable, true);
-    assert.equal(previewSummary.lineCount, 3);
+    assert.equal(previewSummary.lineCount, 2);
+    assert.ok(((previewRunPayload.validations as Array<Record<string, unknown>>) ?? []).some((entry) => entry.code === "unbalanced_preview"));
 
     const saveSettingsResponse = await fetch(`${context.baseUrl}/api/settings/netsuite`, {
       method: "PUT",

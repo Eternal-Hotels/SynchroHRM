@@ -115,17 +115,17 @@
           <div class="panel-head">
             <div>
               <div class="eyebrow muted">Accounting</div>
-              <h2>NetSuite Monetary Posting</h2>
-              <p class="subhead">Choose a property, load a supported monetary report, save GL and polarity setup, then build and submit a balanced journal preview.</p>
+              <h2>NetSuite Statistical GL Workspace</h2>
+              <p class="subhead">Choose a property, pick any parsed report family, map every discovered statistic-style field to a GL code, then build a preview for NetSuite.</p>
             </div>
-            <div class="badge">Phase 1: Monetary items</div>
+            <div class="badge">Phase 1: Statistical lines</div>
           </div>
           <div class="panel-body netsuite-page-layout">
             <section class="settings-card netsuite-property-rail">
               <div class="modal-section-head">
                 <div>
                   <h3>Properties</h3>
-                  <p class="subhead">Only properties with parsed monetary report families appear here.</p>
+                  <p class="subhead">Only properties with parsed report families appear here.</p>
                 </div>
               </div>
               <div id="netsuite-property-status" class="form-status empty">Loading NetSuite properties...</div>
@@ -136,7 +136,7 @@
               <div class="modal-section-head">
                 <div>
                   <h3>Posting Workspace</h3>
-                  <p class="subhead">This first pass mirrors the original Synchro posting cycle on one hotel report attachment at a time.</p>
+                  <p class="subhead">This workspace now treats parsed hotel reports as broad statistical source material, not just hard financial rows.</p>
                 </div>
               </div>
               <div id="netsuite-workspace-empty" class="empty">Select a property to load its NetSuite posting workspace.</div>
@@ -157,8 +157,8 @@
                     <input id="netsuite-posting-external-prefix" type="text" placeholder="Defaults to the property slug">
                   </label>
                   <label class="form-field">
-                    <span>Balancing GL code</span>
-                    <input id="netsuite-posting-balancing-gl" type="text" placeholder="Used when the preview does not net to zero">
+                    <span>Balancing GL code (disabled)</span>
+                    <input id="netsuite-posting-balancing-gl" type="text" placeholder="Balancing is currently disabled for the statistical workflow" disabled>
                   </label>
                   <label class="form-field">
                     <span>Memo template</span>
@@ -193,7 +193,7 @@
                 </form>
 
                 <div id="netsuite-posting-status" class="form-status empty">No NetSuite posting actions yet.</div>
-                <div id="netsuite-posting-mapping-summary" class="notes-block empty">No monetary items loaded yet.</div>
+                <div id="netsuite-posting-mapping-summary" class="notes-block empty">No statistical report lines loaded yet.</div>
                 <div id="netsuite-posting-mappings" class="report-table-wrap"></div>
                 <div id="netsuite-posting-preview" class="report-body"></div>
                 <div id="netsuite-posting-runs" class="report-body"></div>

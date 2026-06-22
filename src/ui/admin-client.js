@@ -947,13 +947,13 @@ function renderNetSuitePosting() {
     ? "Loading NetSuite posting workspace..."
     : (
       properties.length > 0
-        ? `${properties.length} properties currently have supported monetary report families.`
-        : "No parsed monetary report families are available yet."
+        ? `${properties.length} properties currently have parsed report families available for statistical GL work.`
+        : "No parsed report families are available yet."
     );
   netsuitePropertyStatus.className = `form-status ${properties.length > 0 ? "success" : "empty"}`;
 
   if (properties.length === 0) {
-    netsuitePropertyList.innerHTML = '<div class="empty">Run a sync or reparse once hotel monetary reports are available.</div>';
+    netsuitePropertyList.innerHTML = '<div class="empty">Run a sync or reparse once hotel reports are available.</div>';
   } else {
     const selectedSlug = state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.property
       ? state.netsuitePostingWorkspace.property.property_slug
@@ -1341,7 +1341,7 @@ function renderNetSuitePostingMappings(mappings) {
 
   if (!Array.isArray(mappings) || mappings.length === 0) {
     netsuitePostingMappingSummary.className = "notes-block empty";
-    netsuitePostingMappingSummary.textContent = "No monetary items were discovered for the selected attachment.";
+    netsuitePostingMappingSummary.textContent = "No statistical line candidates were discovered for the selected attachment.";
     netsuitePostingMappings.innerHTML = "";
     return;
   }
@@ -1349,10 +1349,10 @@ function renderNetSuitePostingMappings(mappings) {
   const missingCount = mappings.filter((entry) => !(entry.netsuiteGlCode || "").trim()).length;
   netsuitePostingMappingSummary.className = "notes-block";
   netsuitePostingMappingSummary.innerHTML = `
-    <strong>${escapeHtml(String(mappings.length))} discovered monetary items</strong>
+    <strong>${escapeHtml(String(mappings.length))} discovered statistical line candidates</strong>
     <div class="attachment-meta">
       <span>Missing GL codes: ${escapeHtml(String(missingCount))}</span>
-      <span>Defaults can be overridden per line before preview.</span>
+      <span>Every parsed numeric-style field is surfaced here when possible.</span>
     </div>
   `;
 
@@ -1363,8 +1363,8 @@ function renderNetSuitePostingMappings(mappings) {
           <tr>
             <th>Group</th>
             <th>Item</th>
-            <th>Amount Field</th>
-            <th>Current Amount</th>
+            <th>Value Field</th>
+            <th>Current Value</th>
             <th>GL Code</th>
             <th>Polarity</th>
           </tr>
@@ -1406,7 +1406,7 @@ function renderNetSuitePostingPreview(runs) {
 
   const selectedRun = getSelectedNetSuiteRun(runs);
   if (!selectedRun || !selectedRun.previewPayload) {
-    netsuitePostingPreview.innerHTML = '<div class="empty">Build a preview to inspect the posting lines and balance checks.</div>';
+    netsuitePostingPreview.innerHTML = '<div class="empty">Build a preview to inspect the discovered statistical GL lines.</div>';
     return;
   }
 
@@ -1428,9 +1428,9 @@ function renderNetSuitePostingPreview(runs) {
       <div class="attachment-meta">
         <span>External ID: <code>${escapeHtml(preview.externalId || "")}</code></span>
         <span>Memo: ${escapeHtml(preview.memo || "")}</span>
-        <span>Debits: ${escapeHtml(preview.summary ? preview.summary.debitTotal : "0.00")}</span>
-        <span>Credits: ${escapeHtml(preview.summary ? preview.summary.creditTotal : "0.00")}</span>
-        <span>Balance difference: ${escapeHtml(preview.summary ? preview.summary.balanceDifference : "0.00")}</span>
+        <span>Positive side: ${escapeHtml(preview.summary ? preview.summary.debitTotal : "0.00")}</span>
+        <span>Negative side: ${escapeHtml(preview.summary ? preview.summary.creditTotal : "0.00")}</span>
+        <span>Difference: ${escapeHtml(preview.summary ? preview.summary.balanceDifference : "0.00")}</span>
       </div>
       ${validations.length > 0 ? `
         <div class="notes-block">
@@ -1449,9 +1449,9 @@ function renderNetSuitePostingPreview(runs) {
               <th>Group</th>
               <th>Item</th>
               <th>GL Code</th>
-              <th>Amount</th>
-              <th>Debit</th>
-              <th>Credit</th>
+              <th>Value</th>
+              <th>Positive</th>
+              <th>Negative</th>
             </tr>
           </thead>
           <tbody>
@@ -1531,7 +1531,7 @@ function syncNetSuitePostingControls() {
   netsuiteReportTypeSelect.disabled = busy || !hasReportTypes;
   netsuiteAttachmentSelect.disabled = busy || !hasWorkspace;
   netsuitePostingExternalPrefix.disabled = busy || !hasWorkspace;
-  netsuitePostingBalancingGl.disabled = busy || !hasWorkspace;
+  netsuitePostingBalancingGl.disabled = true;
   netsuitePostingMemoTemplate.disabled = busy || !hasWorkspace;
   netsuitePostingSubsidiaryId.disabled = busy || !hasWorkspace;
   netsuitePostingCurrencyId.disabled = busy || !hasWorkspace;
@@ -1651,8 +1651,8 @@ async function buildNetSuitePostingPreview() {
       );
     setNetSuitePostingStatus(
       result.run && result.run.previewPayload && result.run.previewPayload.summary && result.run.previewPayload.summary.postable
-        ? "NetSuite posting preview is balanced and ready for submission."
-        : "NetSuite posting preview built. Review the validations before submitting.",
+        ? "NetSuite statistical preview built. Review the lines and warnings before submitting."
+        : "NetSuite preview built. Review the validations before submitting.",
       result.run && result.run.previewPayload && result.run.previewPayload.summary && result.run.previewPayload.summary.postable ? "success" : "empty"
     );
     renderNetSuitePosting();
