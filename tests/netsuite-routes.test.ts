@@ -1066,6 +1066,96 @@ test("NetSuite posting workspace collapses daily transaction logs into grouped l
   }
 });
 
+test("NetSuite posting workspace collapses room tax listings by charge type", async () => {
+  const context = await createRouteTestContext({
+    fetchImpl: async () => mockResponse(404, { error: "Unexpected request" })
+  });
+
+  try {
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "room_tax_listing_rows",
+      reportTitle: "Room & Tax Listing",
+      reportDate: "2026-06-22",
+      attachmentName: "RoomAndTaxReport.pdf",
+      rows: [
+        {
+          room_number: "101-A",
+          guest_name: "Guest One",
+          confirmation_no: "R1",
+          charge_type: "Room And Tax",
+          arrival_date: "2026-06-13",
+          departure_date: "2026-06-23",
+          rate_amount: "154.90",
+          override_flag: null,
+          tax_amount: "16.11",
+          package_name: null,
+          extra_1: null,
+          extra_2: null,
+          transfer_flag: null,
+          payment_method: "Cash"
+        },
+        {
+          room_number: "102-A",
+          guest_name: "Guest Two",
+          confirmation_no: "R2",
+          charge_type: "Room And Tax",
+          arrival_date: "2026-06-14",
+          departure_date: "2026-06-23",
+          rate_amount: "173.24",
+          override_flag: null,
+          tax_amount: "18.01",
+          package_name: null,
+          extra_1: null,
+          extra_2: null,
+          transfer_flag: null,
+          payment_method: "Cash"
+        },
+        {
+          room_number: "103-A",
+          guest_name: "Guest Three",
+          confirmation_no: "R3",
+          charge_type: "Room And Tax",
+          arrival_date: "2026-06-18",
+          departure_date: "2026-06-22",
+          rate_amount: "188.32",
+          override_flag: null,
+          tax_amount: "19.59",
+          package_name: null,
+          extra_1: null,
+          extra_2: null,
+          transfer_flag: null,
+          payment_method: "Credit Card"
+        }
+      ]
+    });
+
+    const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
+    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites?reportType=room_tax_listing_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(workspaceResponse.status, 200);
+    const workspacePayload = await workspaceResponse.json() as Record<string, unknown>;
+    assert.equal(workspacePayload.selectedReportType, "room_tax_listing_rows");
+
+    const mappings = workspacePayload.mappings as Array<Record<string, unknown>>;
+    assert.equal(mappings.length, 2);
+    assert.ok(mappings.every((entry) => entry.groupLabel === "Charge Type: Room And Tax"));
+    assert.ok(mappings.every((entry) => entry.itemLabel === "All Listed Rooms"));
+
+    const rateMapping = mappings.find((entry) => entry.amountField === "rate_amount");
+    assert.ok(rateMapping);
+    assert.equal(rateMapping?.currentAmount, "516.46");
+
+    const taxMapping = mappings.find((entry) => entry.amountField === "tax_amount");
+    assert.ok(taxMapping);
+    assert.equal(taxMapping?.currentAmount, "53.71");
+  } finally {
+    await context.dispose();
+  }
+});
+
 async function createRouteTestContext(options: {
   masterKey?: string | null;
   fetchImpl: typeof fetch;

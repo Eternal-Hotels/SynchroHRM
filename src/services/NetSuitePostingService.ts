@@ -764,6 +764,10 @@ function discoverAllPostingItems(
     return discoverAllTransactionItems(rows, attachment);
   }
 
+  if (attachment.reportType === "room_tax_listing_rows") {
+    return discoverRoomTaxListingItems(rows, attachment);
+  }
+
   if (attachment.reportType === "best_western_daily_report_rows") {
     return discoverBestWesternDailyReportItems(rows, attachment);
   }
@@ -924,6 +928,49 @@ function discoverAllTransactionItems(
       defaultPostingPolarity: inferMetricPolarity("amount", groupLabel, itemLabel),
       amount
     });
+  }
+
+  return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
+function discoverRoomTaxListingItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const byKey = new Map<string, DiscoveredMonetaryItem>();
+
+  for (const row of rows) {
+    const chargeType = normalizeWhitespace(row.charge_type) || "Uncategorized";
+    const groupLabel = `Charge Type: ${chargeType}`;
+
+    for (const [amountField, amountFieldLabel] of [
+      ["rate_amount", "Rate Amount"],
+      ["tax_amount", "Tax Amount"]
+    ] as const) {
+      const amount = parseAmount(row[amountField]);
+      if (amount === null) {
+        continue;
+      }
+
+      const mappingKey = buildMappingKey(attachment.reportType, amountField, [groupLabel]);
+      const existing = byKey.get(mappingKey);
+      if (existing) {
+        existing.amount = roundMoney(existing.amount + amount);
+        continue;
+      }
+
+      byKey.set(mappingKey, {
+        mappingKey,
+        reportType: attachment.reportType,
+        reportTitle: attachment.reportTitle,
+        groupLabel,
+        itemLabel: "All Listed Rooms",
+        amountField,
+        amountFieldLabel,
+        defaultPostingPolarity: inferMetricPolarity(amountField, groupLabel, amountFieldLabel),
+        amount: roundMoney(amount)
+      });
+    }
   }
 
   return Array.from(byKey.values()).sort(compareDiscoveredItems);
