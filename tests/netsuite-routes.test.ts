@@ -23,9 +23,55 @@ const PRIVATE_KEY_PEM = generateKeyPairSync("rsa", {
   format: "pem"
 }).toString();
 
-test("NetSuite settings routes stay admin-only", async () => {
+test("NetSuite settings routes are available to any authenticated console user", async () => {
   const context = await createRouteTestContext({
-    fetchImpl: async () => mockResponse(200, { access_token: "unused" })
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.endsWith("/services/rest/auth/oauth2/v1/token")) {
+        return mockResponse(200, { access_token: "viewer-token" });
+      }
+      if (url.includes("/services/rest/query/v1/suiteql")) {
+        return mockResponse(200, {
+          count: 1,
+          totalResults: 1,
+          items: [{ id: "200" }]
+        });
+      }
+      if (url.includes("/services/rest/record/v1/metadata-catalog")) {
+        if (url.endsWith("/metadata-catalog")) {
+          return mockResponse(200, {
+            items: [
+              {
+                name: "account",
+                links: [
+                  {
+                    rel: "canonical",
+                    href: "https://1234567.suitetalk.api.netsuite.com/services/rest/record/v1/metadata-catalog/account",
+                    mediaType: "application/json"
+                  },
+                  {
+                    rel: "alternate",
+                    href: "https://1234567.suitetalk.api.netsuite.com/services/rest/record/v1/metadata-catalog/account",
+                    mediaType: "application/schema+json"
+                  }
+                ]
+              }
+            ]
+          });
+        }
+
+        return mockResponse(200, {
+          type: "object",
+          properties: {
+            id: {
+              type: "integer"
+            }
+          }
+        });
+      }
+
+      return mockResponse(200, { access_token: "viewer-token" });
+    }
   });
 
   try {
@@ -36,7 +82,7 @@ test("NetSuite settings routes stay admin-only", async () => {
     const viewerGet = await fetch(`${context.baseUrl}/api/settings/netsuite`, {
       headers: { cookie: viewerCookie }
     });
-    assert.equal(viewerGet.status, 403);
+    assert.equal(viewerGet.status, 200);
 
     const viewerPut = await fetch(`${context.baseUrl}/api/settings/netsuite`, {
       method: "PUT",
@@ -46,24 +92,24 @@ test("NetSuite settings routes stay admin-only", async () => {
       },
       body: JSON.stringify(buildSettingsPayload())
     });
-    assert.equal(viewerPut.status, 403);
+    assert.equal(viewerPut.status, 200);
 
     const viewerTest = await fetch(`${context.baseUrl}/api/settings/netsuite/test`, {
       method: "POST",
       headers: { cookie: viewerCookie }
     });
-    assert.equal(viewerTest.status, 403);
+    assert.equal(viewerTest.status, 200);
 
     const viewerExport = await fetch(`${context.baseUrl}/api/settings/netsuite/debug/metadata-catalog/export`, {
       method: "POST",
       headers: { cookie: viewerCookie }
     });
-    assert.equal(viewerExport.status, 403);
+    assert.equal(viewerExport.status, 200);
 
     const viewerLatest = await fetch(`${context.baseUrl}/api/settings/netsuite/debug/metadata-catalog/latest`, {
       headers: { cookie: viewerCookie }
     });
-    assert.equal(viewerLatest.status, 403);
+    assert.equal(viewerLatest.status, 200);
   } finally {
     await context.dispose();
   }
@@ -356,7 +402,7 @@ test("missing master key disables NetSuite mutation routes while GET stays descr
   }
 });
 
-test("NetSuite posting routes stay admin-only", async () => {
+test("NetSuite posting routes are available to any authenticated console user", async () => {
   const context = await createRouteTestContext({
     fetchImpl: async () => mockResponse(200, { access_token: "unused" })
   });
@@ -369,12 +415,12 @@ test("NetSuite posting routes stay admin-only", async () => {
     const viewerList = await fetch(`${context.baseUrl}/api/netsuite/properties`, {
       headers: { cookie: viewerCookie }
     });
-    assert.equal(viewerList.status, 403);
+    assert.equal(viewerList.status, 200);
 
     const viewerWorkspace = await fetch(`${context.baseUrl}/api/netsuite/properties/test-property`, {
       headers: { cookie: viewerCookie }
     });
-    assert.equal(viewerWorkspace.status, 403);
+    assert.equal(viewerWorkspace.status, 404);
 
     const viewerSave = await fetch(`${context.baseUrl}/api/netsuite/properties/test-property`, {
       method: "PUT",
@@ -388,7 +434,7 @@ test("NetSuite posting routes stay admin-only", async () => {
         defaults: {}
       })
     });
-    assert.equal(viewerSave.status, 403);
+    assert.equal(viewerSave.status, 404);
 
     const viewerPreview = await fetch(`${context.baseUrl}/api/netsuite/properties/test-property/preview`, {
       method: "POST",
@@ -402,13 +448,13 @@ test("NetSuite posting routes stay admin-only", async () => {
         defaults: {}
       })
     });
-    assert.equal(viewerPreview.status, 403);
+    assert.equal(viewerPreview.status, 404);
 
     const viewerSubmit = await fetch(`${context.baseUrl}/api/netsuite/properties/test-property/runs/test-run/submit`, {
       method: "POST",
       headers: { cookie: viewerCookie }
     });
-    assert.equal(viewerSubmit.status, 403);
+    assert.equal(viewerSubmit.status, 404);
   } finally {
     await context.dispose();
   }
@@ -698,6 +744,72 @@ test("NetSuite posting workspace discovers broad report metrics, builds previews
     assert.equal(submitPayload.run.status, "submitted");
     assert.match(String(submitPayload.run.netsuite_response_summary || ""), /JE1001/);
     assert.equal((submitPayload.run.netsuiteResponsePayload as Record<string, unknown>).id, "9981");
+  } finally {
+    await context.dispose();
+  }
+});
+
+test("NetSuite posting workspace collapses same-message PDF and workbook siblings into one source attachment", async () => {
+  const context = await createRouteTestContext({
+    fetchImpl: async () => mockResponse(404, { error: "Unexpected request" })
+  });
+
+  try {
+    const graphMessageId = "message-holiday-dedupe";
+    seedParsedAttachment(context.database, {
+      graphMessageId,
+      propertyName: "Holiday Inn Express Ellensburg",
+      propertySlug: "holiday-inn-express-ellensburg",
+      reportType: "adjustment_refund_activity_rows",
+      reportTitle: "Adjustments and Refunds Activity",
+      reportDate: "2026-06-24",
+      attachmentName: "Jun 25, 2026-ELNWA-Holiday Inn ExpressEllensburg-adjustment-activity.pdf",
+      rows: [
+        {
+          section: "Adjustments",
+          row_kind: "total",
+          summary_label: "Adjustments",
+          adjusted_amount: "12.34"
+        }
+      ]
+    });
+    const workbookAttachmentId = seedParsedAttachment(context.database, {
+      graphMessageId,
+      propertyName: "Holiday Inn Express Ellensburg",
+      propertySlug: "holiday-inn-express-ellensburg",
+      reportType: "adjustment_refund_activity_rows",
+      reportTitle: "Adjustments and Refunds Activity",
+      reportDate: "2026-06-24",
+      attachmentName: "Jun 25, 2026-ELNWA-Holiday Inn ExpressEllensburg-adjustment-activity.xlsx",
+      extension: ".xlsx",
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      rows: [
+        {
+          section: "Adjustments",
+          row_kind: "total",
+          summary_label: "Adjustments",
+          adjusted_amount: "12.34"
+        }
+      ]
+    });
+
+    const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
+    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-ellensburg`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(workspaceResponse.status, 200);
+
+    const workspacePayload = await workspaceResponse.json() as Record<string, unknown>;
+    const supportedAttachments = workspacePayload.supportedAttachments as Array<Record<string, unknown>>;
+    assert.equal(supportedAttachments.length, 1);
+    assert.equal(supportedAttachments[0]?.attachmentId, workbookAttachmentId);
+    assert.equal(supportedAttachments[0]?.attachmentName, "Jun 25, 2026-ELNWA-Holiday Inn ExpressEllensburg-adjustment-activity.xlsx");
+    assert.equal((workspacePayload.selectedAttachment as Record<string, unknown>).attachmentId, workbookAttachmentId);
+    assert.equal((workspacePayload.discoverySummary as Record<string, unknown>).attachmentCount, 1);
+    assert.equal(
+      ((workspacePayload.availableReportTypes as Array<Record<string, unknown>>)[0] ?? {}).attachmentCount,
+      1
+    );
   } finally {
     await context.dispose();
   }
@@ -1233,19 +1345,27 @@ function buildSettingsPayload() {
 function seedParsedAttachment(
   database: AppDatabase,
   options: {
+    graphMessageId?: string;
     propertyName: string;
     propertySlug: string;
     reportType: ReportType;
     reportTitle: string;
     reportDate: string;
     attachmentName: string;
+    extension?: string;
+    contentType?: string;
     rows: Array<Record<string, string | number | null>>;
   }
 ): number {
   const runId = database.createRun("test");
-  const graphMessageId = `message-${randomBytes(6).toString("hex")}`;
+  const graphMessageId = options.graphMessageId ?? `message-${randomBytes(6).toString("hex")}`;
   const graphAttachmentId = `attachment-${randomBytes(6).toString("hex")}`;
   const receivedAt = `${options.reportDate}T09:00:00.000Z`;
+  const extension = options.extension ?? path.extname(options.attachmentName) ?? ".pdf";
+  const contentType = options.contentType
+    ?? (extension.toLowerCase() === ".xlsx"
+      ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      : "application/pdf");
 
   database.upsertMessage({
     graphMessageId,
@@ -1265,8 +1385,8 @@ function seedParsedAttachment(
     attachmentName: options.attachmentName,
     propertyName: options.propertyName,
     propertySlug: options.propertySlug,
-    extension: ".pdf",
-    contentType: "application/pdf",
+    extension,
+    contentType,
     archivedPath: path.join("C:\\archive", options.propertySlug, options.attachmentName),
     status: "parsed",
     ingestRunId: runId

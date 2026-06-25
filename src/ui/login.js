@@ -84,7 +84,7 @@ function syncLoginControls() {
 }
 
 function getHomePathForUser(user) {
-  return user && user.role === "admin" ? "/admin" : "/viewer";
+  return user ? "/admin" : "/login";
 }
 
 function revealLoginForm() {

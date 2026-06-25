@@ -110,7 +110,7 @@ export class AuthService {
     const normalizedPassword = normalizePassword(password);
 
     if (!normalizedUsername || !USERNAME_PATTERN.test(normalizedUsername)) {
-      throw new UserManagementError("Viewer usernames must be 3-32 characters using letters, numbers, dots, dashes, or underscores.");
+      throw new UserManagementError("Usernames must be 3-32 characters using letters, numbers, dots, dashes, or underscores.");
     }
     assertPasswordIsLongEnough(normalizedPassword);
     if (this.database.getUserByUsername(normalizedUsername)) {
@@ -120,7 +120,7 @@ export class AuthService {
     const userId = this.database.createUser(normalizedUsername, hashPassword(normalizedPassword), "viewer");
     const created = this.database.getUserById(userId);
     if (!created) {
-      throw new UserManagementError("Viewer account could not be reloaded after creation.");
+      throw new UserManagementError("User account could not be reloaded after creation.");
     }
 
     return {

@@ -14,7 +14,15 @@ import type {
 } from "../types.js";
 import { parseLongDate } from "../utils/dates.js";
 import { logger } from "../utils/logger.js";
-import { ensureDir, movePathIfExists, pathExists, sanitizeFileName, writeBufferFile, writeTextFile } from "../utils/files.js";
+import {
+  ensureDir,
+  movePathIfExists,
+  pathExists,
+  remapStoredDataPath,
+  sanitizeFileName,
+  writeBufferFile,
+  writeTextFile
+} from "../utils/files.js";
 import { isSenderApproved, validateApprovedSenderPatterns } from "../utils/approvedSenders.js";
 import {
   derivePropertyRefFromAttachmentName,
@@ -55,6 +63,11 @@ interface PropertyMoveRequest {
 
 interface IngestionRunOptions {
   fullRescan?: boolean;
+}
+
+interface StoredWorkbookRepairOptions {
+  propertySlug?: string | null;
+  attachmentNameIncludes?: string | null;
 }
 
 interface ActiveRunState {
@@ -195,6 +208,10 @@ export class IngestionService {
     return this.startStoredReportReparse().promise;
   }
 
+  async repairStoredWorkbookAttachments(options: StoredWorkbookRepairOptions = {}): Promise<IngestionRunResult> {
+    return this.startStoredWorkbookRepair(options).promise;
+  }
+
   async retryAttachmentParse(attachmentId: number): Promise<AttachmentRetryResult> {
     if (this.activeRun) {
       throw new AttachmentRetryError("Please wait for the active inbox sync to finish before retrying a parse.");
@@ -210,8 +227,8 @@ export class IngestionService {
       throw new AttachmentRetryError("Only failed or unsupported PDF attachments can be retried.");
     }
 
-    const archivedPath = typeof attachment.archived_path === "string" ? attachment.archived_path : null;
-    if (!archivedPath || !(await pathExists(archivedPath))) {
+    const archivedPath = await this.resolveArchivedRawPath(attachmentId, attachment.archived_path);
+    if (!archivedPath) {
       throw new AttachmentRetryError(`Archived file for attachment ${attachmentId} is unavailable.`);
     }
 
@@ -449,6 +466,14 @@ export class IngestionService {
     return this.startExclusiveRun("reparse", (runId) => this.reparseStoredReportsInternal(runId));
   }
 
+  private startStoredWorkbookRepair(options: StoredWorkbookRepairOptions): ActiveRunState {
+    if (this.activeRun) {
+      throw new ReparseOperationError("Please wait for the active ingestion run to finish before repairing stored workbook attachments.");
+    }
+
+    return this.startExclusiveRun("reparse", (runId) => this.repairStoredWorkbookAttachmentsInternal(runId, options));
+  }
+
   private persistRunProgress(runId: number, summary: RunSummary): void {
     this.database.updateRunProgress(runId, summary);
   }
@@ -637,6 +662,70 @@ export class IngestionService {
       summary.notes.push(`Reparse failed: ${message}`);
       this.database.finishRun(runId, "failed", summary);
       logger.error("Stored report reparse failed", { runId, error: message });
+      return {
+        runId,
+        status: "failed",
+        summary,
+        exports: []
+      };
+    }
+  }
+
+  private async repairStoredWorkbookAttachmentsInternal(
+    runId: number,
+    options: StoredWorkbookRepairOptions
+  ): Promise<IngestionRunResult> {
+    const summary: RunSummary = {
+      messagesSeen: 0,
+      attachmentsSeen: 0,
+      attachmentsApproved: 0,
+      attachmentsNotApproved: 0,
+      attachmentsArchived: 0,
+      attachmentsParsed: 0,
+      attachmentsDeferred: 0,
+      attachmentsFailed: 0,
+      notes: []
+    };
+
+    try {
+      await Promise.all([
+        ensureDir(path.join(this.dataDir, "raw")),
+        ensureDir(path.join(this.dataDir, "quarantine")),
+        ensureDir(path.join(this.dataDir, "parsed"))
+      ]);
+
+      const attachments = this.filterStoredWorkbookAttachments(
+        this.database.listAttachmentsForReparse(),
+        options
+      );
+      summary.messagesSeen = attachments.length;
+      summary.attachmentsSeen = attachments.length;
+      summary.attachmentsApproved = attachments.length;
+      this.persistRunProgress(runId, summary);
+
+      if (attachments.length === 0) {
+        summary.notes.push("No stored workbook attachments matched the requested repair filter.");
+      }
+
+      for (const attachment of attachments) {
+        await this.reparseAttachment(runId, summary, attachment);
+        this.persistRunProgress(runId, summary);
+      }
+
+      const exports = await this.exportService.exportRun(runId);
+      this.database.finishRun(runId, "completed", summary);
+
+      return {
+        runId,
+        status: "completed",
+        summary,
+        exports
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      summary.notes.push(`Workbook repair failed: ${message}`);
+      this.database.finishRun(runId, "failed", summary);
+      logger.error("Stored workbook repair failed", { runId, error: message });
       return {
         runId,
         status: "failed",
@@ -851,6 +940,37 @@ export class IngestionService {
     ));
   }
 
+  private filterStoredWorkbookAttachments(
+    attachments: Array<Record<string, unknown>>,
+    options: StoredWorkbookRepairOptions
+  ): Array<Record<string, unknown>> {
+    const propertySlugFilter = normalizePropertyName(options.propertySlug ?? null)?.toLowerCase() ?? null;
+    const attachmentNameFilter = normalizePropertyName(options.attachmentNameIncludes ?? null)?.toLowerCase() ?? null;
+
+    return attachments.filter((attachment) => {
+      const extension = String(attachment.extension ?? path.extname(String(attachment.attachment_name ?? ""))).toLowerCase();
+      if (extension !== ".xlsx") {
+        return false;
+      }
+
+      if (propertySlugFilter) {
+        const currentSlug = normalizePropertyName(typeof attachment.property_slug === "string" ? attachment.property_slug : null)?.toLowerCase() ?? "";
+        if (currentSlug !== propertySlugFilter) {
+          return false;
+        }
+      }
+
+      if (attachmentNameFilter) {
+        const attachmentName = String(attachment.attachment_name ?? "").toLowerCase();
+        if (!attachmentName.includes(attachmentNameFilter)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
   private filterAttachmentsByApprovedSender(
     attachments: IncomingAttachment[],
     approvedSenderPatterns: string[],
@@ -885,7 +1005,6 @@ export class IngestionService {
   ): Promise<void> {
     const attachmentId = Number(attachment.id);
     const attachmentName = String(attachment.attachment_name ?? "");
-    const archivedPath = String(attachment.archived_path ?? "");
     const extension = String(attachment.extension ?? path.extname(attachmentName)).toLowerCase();
     const existingPropertyName = typeof attachment.property_name === "string" ? attachment.property_name : null;
     const existingPropertySlug = typeof attachment.property_slug === "string" ? attachment.property_slug : null;
@@ -901,7 +1020,8 @@ export class IngestionService {
 
     this.database.deleteParsedReportsForAttachment(attachmentId);
 
-    if (!archivedPath || !(await pathExists(archivedPath))) {
+    const archivedPath = await this.resolveArchivedRawPath(attachmentId, attachment.archived_path);
+    if (!archivedPath) {
       this.database.updateAttachment(attachmentId, {
         ingestRunId: runId,
         propertyName: property.propertyName,
@@ -1061,6 +1181,32 @@ export class IngestionService {
       summary.attachmentsFailed += 1;
       summary.notes.push(`Attachment ${attachmentName} ${quarantineReason}: ${reason}`);
     }
+  }
+
+  private async resolveArchivedRawPath(attachmentId: number, storedPath: unknown): Promise<string | null> {
+    if (typeof storedPath !== "string") {
+      return null;
+    }
+
+    const candidate = storedPath.trim();
+    if (!candidate) {
+      return null;
+    }
+
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+
+    const remappedPath = remapStoredDataPath(candidate, this.dataDir);
+    if (!remappedPath || !(await pathExists(remappedPath))) {
+      return null;
+    }
+
+    if (remappedPath !== candidate) {
+      this.database.updateAttachment(attachmentId, { archivedPath: remappedPath });
+    }
+
+    return remappedPath;
   }
 
   private async resetGeneratedArtifacts(): Promise<void> {

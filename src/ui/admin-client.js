@@ -124,7 +124,7 @@ const netsuitePostingMappingSummary = document.getElementById("netsuite-posting-
 const netsuitePostingMappings = document.getElementById("netsuite-posting-mappings");
 const netsuitePostingPreview = document.getElementById("netsuite-posting-preview");
 const netsuitePostingRuns = document.getElementById("netsuite-posting-runs");
-const PAGE_IDS = ["overview", "properties", "netsuite", "scope", "settings"];
+const PAGE_IDS = ["overview", "properties", "netsuite", "users", "settings"];
 const propertyEditorAvailable = Boolean(
   propertyEditForm &&
   propertyNameInput &&
@@ -840,7 +840,7 @@ function renderAccount() {
     return;
   }
 
-  heroAccount.textContent = `Signed in as ${state.currentUser.username} (${state.currentUser.role})`;
+  heroAccount.textContent = `Signed in as ${state.currentUser.username} | full console access`;
 }
 
 function renderOverview() {
@@ -936,13 +936,13 @@ function renderNetSuitePosting() {
   }
 
   syncNetSuitePostingControls();
-  if (!isAdmin()) {
-    netsuitePropertyStatus.textContent = "Only admins can use the NetSuite posting workspace.";
+  if (!state.currentUser) {
+    netsuitePropertyStatus.textContent = "Sign in to use the NetSuite posting workspace.";
     netsuitePropertyStatus.className = "form-status empty";
-    netsuitePropertyList.innerHTML = '<div class="empty">Admin access is required for NetSuite posting work.</div>';
+    netsuitePropertyList.innerHTML = '<div class="empty">Sign in to use the NetSuite posting workspace.</div>';
     netsuiteWorkspace.hidden = true;
     netsuiteWorkspaceEmpty.hidden = false;
-    netsuiteWorkspaceEmpty.textContent = "Only admins can use the NetSuite posting workspace.";
+    netsuiteWorkspaceEmpty.textContent = "Sign in to use the NetSuite posting workspace.";
     return;
   }
 
@@ -1178,25 +1178,13 @@ function renderSettings() {
     return;
   }
 
+  if (!state.currentUser) {
+    return;
+  }
+
   syncViewerFormControls();
   syncApprovedSenderFormControls();
   syncNetSuiteFormControls();
-
-  if (!isAdmin()) {
-    if (viewerSettingsAvailable) {
-      viewerUserList.innerHTML = '<div class="empty">Only admins can manage viewer accounts.</div>';
-      setViewerFormStatus("Only admins can manage viewer accounts.", "empty");
-    }
-    if (approvedSenderSettingsAvailable) {
-      approvedSendersInput.value = "";
-      setApprovedSenderStatus("Only admins can manage sender allowlist settings.", "empty");
-    }
-    if (netsuiteSettingsAvailable) {
-      setNetSuiteStatus("Only admins can manage NetSuite connector settings.", "empty");
-      renderNetSuiteSettings();
-    }
-    return;
-  }
 
   if (approvedSenderSettingsAvailable) {
     approvedSendersStatus.textContent = state.approvedSenderStatus;
@@ -1220,49 +1208,69 @@ function renderSettings() {
     return;
   }
 
-  viewerUserList.innerHTML = state.users.map((user) => `
-    <article class="attachment-card">
-      <div class="attachment-top">
-        <div>
-          <strong>${escapeHtml(user.username)}</strong>
-          <div class="attachment-meta">
-            <span>Role: ${escapeHtml(user.role)}</span>
-            <span>Created: ${escapeHtml(formatDateTime(user.createdAt))}</span>
+  viewerUserList.innerHTML = state.users.map((user) => {
+    const canChangePassword = canManageUserPassword(Number(user.id));
+
+    return `
+      <article class="attachment-card">
+        <div class="attachment-top">
+          <div>
+            <strong>${escapeHtml(user.username)}</strong>
+            <div class="attachment-meta">
+              <span>Access: Full console</span>
+              <span>Created: ${escapeHtml(formatDateTime(user.createdAt))}</span>
+            </div>
           </div>
+          <span class="status-chip ${user.role === "admin" ? "completed" : ""}">${escapeHtml(user.role === "admin" ? "Primary admin" : "Full access")}</span>
         </div>
-        <span class="status-chip ${slugify(user.role)}">${escapeHtml(user.role)}</span>
-      </div>
-      <form class="user-password-form" data-password-user-id="${escapeHtml(String(user.id))}">
-        <label class="form-field">
-          <span>${user.role === "admin" ? "Admin password" : "Viewer password"}</span>
-          <input
-            name="password"
-            type="password"
-            placeholder="At least 8 characters"
-            autocomplete="new-password"
-            minlength="8"
-            ${Number(user.id) === state.userPasswordSavingId ? "disabled" : ""}
-            required
-          >
-        </label>
-        <div class="toolbar-row">
-          <button
-            class="secondary"
-            type="submit"
-            ${Number(user.id) === state.userPasswordSavingId ? "disabled" : ""}
-          >${Number(user.id) === state.userPasswordSavingId ? "Saving..." : "Change Password"}</button>
-          ${user.role === "viewer" ? `
-            <button
-              class="secondary"
-              type="button"
-              data-delete-user-id="${escapeHtml(String(user.id))}"
-              ${Number(user.id) === state.viewerDeletingUserId ? "disabled" : ""}
-            >${Number(user.id) === state.viewerDeletingUserId ? "Removing..." : "Remove Viewer"}</button>
-          ` : '<span class="badge">Permanent admin</span>'}
-        </div>
-      </form>
-    </article>
-  `).join("");
+        ${canChangePassword ? `
+          <form class="user-password-form" data-password-user-id="${escapeHtml(String(user.id))}">
+            <label class="form-field">
+              <span>Set new password</span>
+              <input
+                name="password"
+                type="password"
+                placeholder="At least 8 characters"
+                autocomplete="new-password"
+                minlength="8"
+                ${Number(user.id) === state.userPasswordSavingId ? "disabled" : ""}
+                required
+              >
+            </label>
+            <div class="toolbar-row">
+              <button
+                class="secondary"
+                type="submit"
+                ${Number(user.id) === state.userPasswordSavingId ? "disabled" : ""}
+              >${Number(user.id) === state.userPasswordSavingId ? "Saving..." : "Change Password"}</button>
+              ${user.role === "viewer" ? `
+                <button
+                  class="secondary"
+                  type="button"
+                  data-delete-user-id="${escapeHtml(String(user.id))}"
+                  ${Number(user.id) === state.viewerDeletingUserId ? "disabled" : ""}
+                >${Number(user.id) === state.viewerDeletingUserId ? "Removing..." : "Remove User"}</button>
+              ` : '<span class="badge">Primary safety account</span>'}
+            </div>
+          </form>
+        ` : `
+          <div class="user-password-form">
+            <div class="form-help">Only this user or the primary admin can change this password.</div>
+            <div class="toolbar-row">
+              ${user.role === "viewer" ? `
+                <button
+                  class="secondary"
+                  type="button"
+                  data-delete-user-id="${escapeHtml(String(user.id))}"
+                  ${Number(user.id) === state.viewerDeletingUserId ? "disabled" : ""}
+                >${Number(user.id) === state.viewerDeletingUserId ? "Removing..." : "Remove User"}</button>
+              ` : '<span class="badge">Primary safety account</span>'}
+            </div>
+          </div>
+        `}
+      </article>
+    `;
+  }).join("");
 }
 
 function renderNetSuiteReportTypeOptions(workspace) {
@@ -1942,7 +1950,7 @@ function syncViewerFormControls() {
     return;
   }
 
-  const disabled = state.viewerSaving || !isAdmin();
+  const disabled = state.viewerSaving || !state.currentUser;
   viewerCreateButton.disabled = disabled;
   viewerUsernameInput.disabled = disabled;
   viewerPasswordInput.disabled = disabled;
@@ -2307,7 +2315,7 @@ async function saveApprovedSenders() {
 }
 
 async function createViewerUser() {
-  if (!viewerSettingsAvailable || !isAdmin()) {
+  if (!viewerSettingsAvailable || !state.currentUser) {
     return;
   }
 
@@ -2316,7 +2324,7 @@ async function createViewerUser() {
 
   state.viewerSaving = true;
   syncViewerFormControls();
-  setViewerFormStatus("Creating viewer account...", "empty");
+  setViewerFormStatus("Creating user account...", "empty");
 
   try {
     await fetchJson("/api/users", {
@@ -2328,8 +2336,8 @@ async function createViewerUser() {
     });
 
     viewerUserForm.reset();
-    setViewerFormStatus(`Viewer ${username} created.`, "success");
-    await refreshDashboard(`Viewer ${username} created.`);
+    setViewerFormStatus(`User ${username} created with full access.`, "success");
+    await refreshDashboard(`User ${username} created with full access.`);
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
     setViewerFormStatus(message, "error");
@@ -2340,7 +2348,7 @@ async function createViewerUser() {
 }
 
 async function changeUserPassword(userId, password) {
-  if (!isAdmin() || state.userPasswordSavingId === userId) {
+  if (!canManageUserPassword(userId) || state.userPasswordSavingId === userId) {
     return;
   }
 
@@ -2373,7 +2381,7 @@ async function changeUserPassword(userId, password) {
 }
 
 async function deleteViewerUser(userId) {
-  if (!isAdmin() || state.viewerDeletingUserId === userId) {
+  if (!state.currentUser || state.viewerDeletingUserId === userId) {
     return;
   }
 
@@ -2385,8 +2393,8 @@ async function deleteViewerUser(userId) {
       method: "DELETE"
     });
 
-    setViewerFormStatus("Viewer removed.", "success");
-    await refreshDashboard("Viewer removed.");
+    setViewerFormStatus("User removed.", "success");
+    await refreshDashboard("User removed.");
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
     setViewerFormStatus(message, "error");
@@ -2420,11 +2428,28 @@ function normalizePage(page) {
     return "overview";
   }
 
+  if (page === "scope") {
+    return "users";
+  }
+
   return PAGE_IDS.includes(page) ? page : "overview";
 }
 
 function isAdmin() {
+  // Roles are still stored for bootstrap safety, but the current console grants
+  // the same full access to every authenticated user.
+  return Boolean(state.currentUser);
+}
+
+function isPrimaryAdmin() {
   return Boolean(state.currentUser && state.currentUser.role === "admin");
+}
+
+function canManageUserPassword(userId) {
+  return Boolean(
+    state.currentUser
+    && (isPrimaryAdmin() || Number(state.currentUser.id) === Number(userId))
+  );
 }
 
 function isPageAllowed(page) {

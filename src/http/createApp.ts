@@ -125,10 +125,6 @@ export function createApp(
       response.redirect("/login");
       return;
     }
-    if (user.role !== "admin") {
-      response.redirect("/viewer");
-      return;
-    }
 
     response.sendFile(path.join(uiDir, "admin-panel.html"));
   });
@@ -139,12 +135,8 @@ export function createApp(
       response.redirect("/login");
       return;
     }
-    if (user.role === "admin") {
-      response.redirect("/admin");
-      return;
-    }
 
-    response.sendFile(path.join(uiDir, "viewer-panel.html"));
+    response.redirect("/admin");
   });
 
   app.get("/health", (_request, response) => {
@@ -188,7 +180,7 @@ export function createApp(
   });
 
   app.get("/api/users", (_request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -196,7 +188,7 @@ export function createApp(
   });
 
   app.get("/api/settings/approved-senders", (_request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -204,7 +196,7 @@ export function createApp(
   });
 
   app.put("/api/settings/approved-senders", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -226,7 +218,7 @@ export function createApp(
   });
 
   app.get("/api/settings/netsuite", (_request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -234,7 +226,7 @@ export function createApp(
   });
 
   app.put("/api/settings/netsuite", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -264,7 +256,7 @@ export function createApp(
   });
 
   app.post("/api/settings/netsuite/test", async (_request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -278,7 +270,7 @@ export function createApp(
   });
 
   app.post("/api/settings/netsuite/debug/metadata-catalog/export", async (_request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -295,7 +287,7 @@ export function createApp(
   });
 
   app.get("/api/settings/netsuite/debug/metadata-catalog/latest", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -309,7 +301,7 @@ export function createApp(
   });
 
   app.get("/api/netsuite/properties", (_request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -319,7 +311,7 @@ export function createApp(
   });
 
   app.get("/api/netsuite/properties/:propertySlug", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -344,7 +336,7 @@ export function createApp(
   });
 
   app.put("/api/netsuite/properties/:propertySlug", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -371,7 +363,7 @@ export function createApp(
   });
 
   app.post("/api/netsuite/properties/:propertySlug/preview", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -399,7 +391,7 @@ export function createApp(
   });
 
   app.post("/api/netsuite/properties/:propertySlug/runs/:runId/submit", async (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -413,7 +405,7 @@ export function createApp(
   });
 
   app.post("/api/users", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -434,13 +426,18 @@ export function createApp(
   });
 
   app.patch("/api/users/:userId/password", (request, response) => {
-    if (!requireAdminUser(response)) {
+    const actingUser = requireAuthenticatedUser(response);
+    if (!actingUser) {
       return;
     }
 
     const userId = Number(request.params.userId);
     if (!Number.isInteger(userId) || userId <= 0) {
       response.status(400).json({ error: "userId must be a positive integer." });
+      return;
+    }
+    if (actingUser.role !== "admin" && actingUser.id !== userId) {
+      response.status(403).json({ error: "You can only change your own password." });
       return;
     }
 
@@ -460,7 +457,7 @@ export function createApp(
   });
 
   app.delete("/api/users/:userId", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -484,7 +481,7 @@ export function createApp(
   });
 
   app.post("/api/ingest/run", (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -510,7 +507,7 @@ export function createApp(
   });
 
   app.post("/api/ingest/reparse", (_request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -594,7 +591,7 @@ export function createApp(
   });
 
   app.patch("/api/properties/:propertySlug", async (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -729,7 +726,7 @@ export function createApp(
   });
 
   app.post("/api/attachments/:attachmentId/retry-parse", async (request, response) => {
-    if (!requireAdminUser(response)) {
+    if (!requireAuthenticatedUser(response)) {
       return;
     }
 
@@ -825,7 +822,7 @@ function getAuthenticatedUser(request: express.Request, authService: AuthService
 }
 
 function getHomePathForUser(user: SessionUser): string {
-  return user.role === "admin" ? "/admin" : "/viewer";
+  return "/admin";
 }
 
 function setSessionCookie(
@@ -858,10 +855,10 @@ function getResponseUser(response: express.Response): SessionUser {
   return response.locals.authUser as SessionUser;
 }
 
-function requireAdminUser(response: express.Response): SessionUser | null {
-  const user = getResponseUser(response);
-  if (user.role !== "admin") {
-    response.status(403).json({ error: "Admin access is required for settings changes." });
+function requireAuthenticatedUser(response: express.Response): SessionUser | null {
+  const user = response.locals.authUser as SessionUser | undefined;
+  if (!user) {
+    response.status(401).json({ error: "Authentication required." });
     return null;
   }
 

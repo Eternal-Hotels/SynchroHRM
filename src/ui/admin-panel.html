@@ -39,7 +39,7 @@
           <a class="tab-link active" href="#overview" data-page-link="overview" aria-current="page">Overview</a>
           <a class="tab-link" href="#properties" data-page-link="properties">Properties</a>
           <a class="tab-link" href="#netsuite" data-page-link="netsuite">NetSuite</a>
-          <a class="tab-link" href="#scope" data-page-link="scope">Scope</a>
+          <a class="tab-link" href="#users" data-page-link="users">Users</a>
           <a class="tab-link" href="#settings" data-page-link="settings">Settings</a>
         </nav>
       </aside>
@@ -84,30 +84,48 @@
           <div id="property-list" class="card-grid"></div>
         </section>
 
-        <section id="scope" class="panel page-view" data-page="scope" hidden>
+        <section id="users" class="panel page-view" data-page="users" hidden>
           <div class="panel-head">
             <div>
-              <div class="eyebrow muted">Current Scope</div>
-              <h2>What This Interface Covers</h2>
+              <div class="eyebrow muted">Access</div>
+              <h2>User Management</h2>
+              <p class="subhead">Everyone added here currently receives full console access to report history, ingestion tools, property edits, and NetSuite statistical GL setup.</p>
             </div>
+            <div class="badge">Full console access</div>
           </div>
-          <div class="panel-body scope-grid">
-            <div class="scope-card">
-              <strong>Mailbox polling</strong>
-              <p>App-only Microsoft Graph access against the `Inbox` for `auditor@eternalhotels.com`. Scheduled polling stays incremental, while manual sync runs do a full Inbox scan for backfill.</p>
-            </div>
-            <div class="scope-card">
-              <strong>Parsing behavior</strong>
-              <p>PDF report families are parsed into staging tables and CSVs. XLSX attachments are archived and tracked, but intentionally deferred in v1.</p>
-            </div>
-            <div class="scope-card">
-              <strong>Operational storage</strong>
-              <p>Raw attachments, parsed JSON, SQLite state, and latest CSV exports all stay under the local `storage` directory for auditability.</p>
-            </div>
-            <div class="scope-card">
-              <strong>Next lifecycle step</strong>
-              <p>The generated CSVs are property-scoped staging outputs for a later NetSuite REST integration, not final NetSuite payloads yet.</p>
-            </div>
+          <div class="panel-body settings-grid">
+            <section class="settings-card">
+              <div class="modal-section-head">
+                <div>
+                  <h3>Add User</h3>
+                  <p class="subhead">Create another verified accountant account for this portal. New users currently receive the same full access as every other signed-in user.</p>
+                </div>
+              </div>
+              <form id="viewer-user-form" class="property-form">
+                <label class="form-field">
+                  <span>Username</span>
+                  <input id="viewer-username-input" name="username" type="text" placeholder="jane.doe" required>
+                </label>
+                <label class="form-field">
+                  <span>Initial password</span>
+                  <input id="viewer-password-input" name="password" type="password" placeholder="At least 8 characters" required>
+                </label>
+                <div class="toolbar-row">
+                  <button id="viewer-create-button" class="primary" type="submit">Add User</button>
+                </div>
+                <div id="viewer-form-status" class="form-status empty">No account changes yet.</div>
+              </form>
+            </section>
+
+            <section class="settings-card settings-card-wide">
+              <div class="modal-section-head">
+                <div>
+                  <h3>Current Users</h3>
+                  <p class="subhead">All listed accounts currently have full access. The bootstrap `admin` account stays permanent as the safety account, and other users can be removed here whenever needed.</p>
+                </div>
+              </div>
+              <div id="viewer-user-list" class="list-grid"></div>
+            </section>
           </div>
         </section>
 
@@ -208,7 +226,7 @@
               <div class="eyebrow muted">Configuration</div>
               <h2>Settings</h2>
             </div>
-            <div id="settings-badge" class="badge">Admin only</div>
+            <div id="settings-badge" class="badge">Shared configuration</div>
           </div>
           <div class="panel-body settings-grid">
             <section class="settings-card">
@@ -284,38 +302,6 @@
               </form>
             </section>
 
-            <section class="settings-card">
-              <div class="modal-section-head">
-                <div>
-                  <h3>Viewer Access</h3>
-                  <p class="subhead">Create read-and-operate viewer accounts for the HRM console. Viewers can use the app but cannot access this page.</p>
-                </div>
-              </div>
-              <form id="viewer-user-form" class="property-form">
-                <label class="form-field">
-                  <span>Viewer username</span>
-                  <input id="viewer-username-input" name="username" type="text" placeholder="viewer.ops" required>
-                </label>
-                <label class="form-field">
-                  <span>Temporary password</span>
-                  <input id="viewer-password-input" name="password" type="password" placeholder="At least 8 characters" required>
-                </label>
-                <div class="toolbar-row">
-                  <button id="viewer-create-button" class="primary" type="submit">Add Viewer</button>
-                </div>
-                <div id="viewer-form-status" class="form-status empty">No account changes yet.</div>
-              </form>
-            </section>
-
-            <section class="settings-card">
-              <div class="modal-section-head">
-                <div>
-                  <h3>Current Users</h3>
-                  <p class="subhead">The `admin` account stays permanent, and you can rotate passwords here whenever needed. Viewer accounts can still be removed at any time.</p>
-                </div>
-              </div>
-              <div id="viewer-user-list" class="list-grid"></div>
-            </section>
           </div>
         </section>
       </div>

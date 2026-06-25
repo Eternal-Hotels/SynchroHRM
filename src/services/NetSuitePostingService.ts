@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { AppDatabase } from "../db/Database.js";
 import { COMMON_EXPORT_COLUMNS, REPORT_COLUMN_MAP, REPORT_TITLES } from "../reports.js";
 import { REPORT_TYPES, type ReportType } from "../types.js";
@@ -378,8 +379,26 @@ export class NetSuitePostingService {
   }
 
   private listSupportedAttachments(propertySlug: string): SupportedAttachmentSummary[] {
-    return this.database.getPropertyAttachments(propertySlug)
-      .filter((attachment) => attachment.status === "parsed")
+    const deduped = new Map<string, Record<string, unknown>>();
+
+    for (const attachment of this.database.getPropertyAttachments(propertySlug)) {
+      if (attachment.status !== "parsed") {
+        continue;
+      }
+
+      const reportType = normalizeSupportedReportType(attachment.report_type);
+      if (!reportType) {
+        continue;
+      }
+
+      const key = buildSupportedAttachmentGroupKey(attachment, reportType);
+      const current = deduped.get(key);
+      if (!current || prefersSupportedAttachment(attachment, current)) {
+        deduped.set(key, attachment);
+      }
+    }
+
+    return Array.from(deduped.values())
       .map((attachment) => {
         const reportType = normalizeSupportedReportType(attachment.report_type);
         if (!reportType) {
@@ -1400,6 +1419,54 @@ function normalizeWhitespace(value: unknown): string {
   return typeof value === "string"
     ? value.replace(/\s+/g, " ").trim()
     : (value === null || value === undefined ? "" : String(value).replace(/\s+/g, " ").trim());
+}
+
+function buildSupportedAttachmentGroupKey(
+  attachment: Record<string, unknown>,
+  reportType: SupportedMonetaryReportType
+): string {
+  const messageId = normalizeWhitespace(attachment.graph_message_id);
+  const reportDate = normalizeWhitespace(attachment.report_date);
+  const reportTitle = normalizeWhitespace(attachment.report_title || REPORT_TITLES[reportType]);
+  const receivedAt = normalizeWhitespace(attachment.received_at);
+
+  return [
+    messageId || "__no_message__",
+    reportType,
+    reportDate || "__no_report_date__",
+    reportTitle || "__no_report_title__",
+    receivedAt || "__no_received_at__"
+  ].join("::");
+}
+
+function prefersSupportedAttachment(
+  candidate: Record<string, unknown>,
+  current: Record<string, unknown>
+): boolean {
+  const candidateRank = supportedAttachmentRank(candidate);
+  const currentRank = supportedAttachmentRank(current);
+  if (candidateRank !== currentRank) {
+    return candidateRank > currentRank;
+  }
+
+  const candidateId = Number(candidate.id);
+  const currentId = Number(current.id);
+  return candidateId > currentId;
+}
+
+function supportedAttachmentRank(attachment: Record<string, unknown>): number {
+  const extension = path.extname(String(attachment.attachment_name || "")).toLowerCase();
+  switch (extension) {
+    case ".xlsx":
+    case ".xls":
+      return 3;
+    case ".csv":
+      return 2;
+    case ".pdf":
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 function normalizeMappingPart(value: string): string {

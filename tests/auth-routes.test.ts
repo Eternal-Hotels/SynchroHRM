@@ -52,8 +52,75 @@ test("production auth routes mark session cookies as Secure", async () => {
   }
 });
 
+test("non-admin users can only change their own password while the primary admin can reset any account", async () => {
+  const context = await createRouteTestContext();
+
+  try {
+    const viewer = context.authService.createViewer("viewer.ops", "ViewerPass123!");
+    const adminUser = context.database.getUserByUsername("admin");
+    assert.ok(adminUser);
+
+    const viewerCookie = await login(context.baseUrl, "viewer.ops", "ViewerPass123!");
+    const forbiddenResponse = await fetch(`${context.baseUrl}/api/users/${adminUser.id}/password`, {
+      method: "PATCH",
+      headers: {
+        cookie: viewerCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ password: "BlockedPass123!" })
+    });
+    assert.equal(forbiddenResponse.status, 403);
+    const forbiddenPayload = await forbiddenResponse.json() as { error: string };
+    assert.match(forbiddenPayload.error, /own password/i);
+
+    const ownPasswordResponse = await fetch(`${context.baseUrl}/api/users/${viewer.id}/password`, {
+      method: "PATCH",
+      headers: {
+        cookie: viewerCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ password: "ViewerPass456!" })
+    });
+    assert.equal(ownPasswordResponse.status, 200);
+
+    const oldLoginResponse = await fetch(`${context.baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        authorizedUserConfirmed: true,
+        username: "viewer.ops",
+        password: "ViewerPass123!"
+      })
+    });
+    assert.equal(oldLoginResponse.status, 401);
+
+    const newViewerCookie = await login(context.baseUrl, "viewer.ops", "ViewerPass456!");
+    assert.ok(newViewerCookie);
+
+    const adminCookie = await login(context.baseUrl, "admin", "AdminPass123!");
+    const adminResetResponse = await fetch(`${context.baseUrl}/api/users/${viewer.id}/password`, {
+      method: "PATCH",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ password: "ViewerPass789!" })
+    });
+    assert.equal(adminResetResponse.status, 200);
+
+    const resetViewerCookie = await login(context.baseUrl, "viewer.ops", "ViewerPass789!");
+    assert.ok(resetViewerCookie);
+  } finally {
+    await context.dispose();
+  }
+});
+
 async function createRouteTestContext(): Promise<{
   baseUrl: string;
+  authService: AuthService;
+  database: AppDatabase;
   dispose: () => Promise<void>;
 }> {
   const root = await mkdtemp(path.join(tmpdir(), "synchro-auth-routes-"));
@@ -81,6 +148,8 @@ async function createRouteTestContext(): Promise<{
 
   return {
     baseUrl: `http://127.0.0.1:${port}`,
+    authService,
+    database,
     dispose: async () => {
       await closeServer(server);
       database.close();
@@ -108,6 +177,22 @@ function mockConfig(): AppConfig {
 
 function extractCookie(header: string): string {
   return header.split(";")[0] ?? "";
+}
+
+async function login(baseUrl: string, username: string, password: string): Promise<string> {
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      authorizedUserConfirmed: true,
+      username,
+      password
+    })
+  });
+  assert.equal(response.status, 200);
+  return extractCookie(String(response.headers.get("set-cookie") ?? ""));
 }
 
 async function listen(app: ReturnType<typeof createApp>): Promise<Server> {

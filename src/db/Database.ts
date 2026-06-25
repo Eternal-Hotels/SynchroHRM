@@ -30,6 +30,7 @@ interface AttachmentInsert {
 }
 
 interface AttachmentUpdate {
+  archivedPath?: string;
   status?: string;
   propertyName?: string | null;
   propertySlug?: string | null;
@@ -1032,7 +1033,8 @@ export class AppDatabase {
     const now = new Date().toISOString();
     this.db.prepare(`
       UPDATE attachments
-      SET status = ?,
+      SET archived_path = ?,
+          status = ?,
           property_name = ?,
           property_slug = ?,
           report_type = ?,
@@ -1045,6 +1047,7 @@ export class AppDatabase {
           updated_at = ?
       WHERE id = ?
     `).run(
+      pickAttachmentUpdateValue(input, "archivedPath", current.archived_path),
       pickAttachmentUpdateValue(input, "status", current.status),
       pickAttachmentUpdateValue(input, "propertyName", current.property_name),
       pickAttachmentUpdateValue(input, "propertySlug", current.property_slug),

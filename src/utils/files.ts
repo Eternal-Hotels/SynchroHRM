@@ -34,11 +34,27 @@ export async function pathExists(targetPath: string): Promise<boolean> {
     return true;
   } catch (error) {
     const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
+    if (nodeError.code === "ENOENT" || nodeError.code === "ENAMETOOLONG" || nodeError.code === "EINVAL") {
       return false;
     }
     throw error;
   }
+}
+
+export function remapStoredDataPath(storedPath: string, dataDir: string): string | null {
+  const normalizedPath = storedPath.trim().replace(/\\/g, "/");
+  const match = normalizedPath.match(/(?:^|\/)storage\/(raw|parsed|quarantine)\/(.+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const storageKind = match[1].toLowerCase();
+  const relativeSegments = match[2].split("/").filter(Boolean);
+  if (relativeSegments.length === 0) {
+    return null;
+  }
+
+  return path.join(dataDir, storageKind, ...relativeSegments);
 }
 
 export async function movePathIfExists(sourcePath: string, destinationPath: string): Promise<boolean> {

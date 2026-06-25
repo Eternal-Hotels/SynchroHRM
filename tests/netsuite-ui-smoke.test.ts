@@ -5,7 +5,6 @@ import { readFile } from "node:fs/promises";
 test("admin NetSuite settings UI wires the expected fields and endpoints", async () => {
   const html = await readFile("src/ui/admin-panel.html", "utf8");
   const client = await readFile("src/ui/admin-client.js", "utf8");
-  const viewer = await readFile("src/ui/viewer-panel.html", "utf8");
 
   for (const id of [
     "netsuite-settings-form",
@@ -26,12 +25,25 @@ test("admin NetSuite settings UI wires the expected fields and endpoints", async
     assert.match(html, new RegExp(`id="${id}"`));
   }
 
+  for (const id of [
+    "viewer-user-form",
+    "viewer-username-input",
+    "viewer-password-input",
+    "viewer-create-button",
+    "viewer-user-list"
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+
   assert.match(html, /NetSuite Connector/);
   assert.match(html, /NetSuite Statistical GL Workspace/);
+  assert.match(html, /User Management/);
+  assert.match(html, /Full console access/);
   assert.match(html, /Phase 1: Statistical categories/);
   assert.match(html, /Test Connection/);
   assert.match(html, /Export Metadata Catalog CSV/);
   assert.match(html, /Clear Saved Key/);
+  assert.doesNotMatch(html, />Scope</);
   assert.match(html, /id="netsuite-property-list"/);
   assert.match(html, /id="netsuite-report-type-select"/);
   assert.match(html, /id="netsuite-attachment-select"/);
@@ -42,9 +54,8 @@ test("admin NetSuite settings UI wires the expected fields and endpoints", async
   assert.match(client, /\/api\/settings\/netsuite\/test/);
   assert.match(client, /\/api\/settings\/netsuite\/debug\/metadata-catalog\/export/);
   assert.match(client, /\/api\/netsuite\/properties/);
+  assert.match(client, /\/api\/users/);
   assert.match(client, /\/api\/netsuite\/properties\/.*\/preview/);
   assert.match(client, /\/api\/netsuite\/properties\/.*\/runs\/.*\/submit/);
   assert.match(html, /\/api\/settings\/netsuite\/debug\/metadata-catalog\/latest/);
-  assert.doesNotMatch(viewer, /NetSuite Connector/);
-  assert.doesNotMatch(viewer, /NetSuite Statistical GL Workspace/);
 });
