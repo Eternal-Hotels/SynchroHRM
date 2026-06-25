@@ -790,6 +790,10 @@ export function parseChoiceAuditPacketDocument(document: PdfDocumentText): Array
   return parseChoiceAuditPacket(document);
 }
 
+export function parseAdvanceDepositActivityDocument(document: PdfDocumentText): Array<Record<string, string | null>> {
+  return parseAdvanceDepositActivity(document);
+}
+
 function parseChoiceAuditPacket(document: PdfDocumentText): ChoiceAuditRow[] {
   const rows: ChoiceAuditRow[] = [];
   const pages = groupLinesByPage(document.lines);
@@ -3670,24 +3674,57 @@ function parseAdvanceDepositActivity(document: PdfDocumentText): Array<Record<st
     "Reservations",
     "Confirmation",
     "Number",
-    "Guest Name Check In Date Rate Plan Name Payment Method Due Date Deposit Posted"
+    "Guest Name Check In Date Rate Plan Name Payment Method Due Date Deposit Posted",
+    "Confirmatio Guest First Name Last Name Company Check In Check Out Rate Plan Rate Plan PAYMENT Last 4 Due Date Deposit Deposit Deposit",
+    "n Number Name Name Date Date Code Name METHOD: Digits Collected Collected Used",
+    "Until Date Today"
   ]));
 
   const blocks = collectLineBlocks(
     lines,
-    (line) => /^\d{8}$/.test(sliceText(line, 40, 80)) && Boolean(parseShortDate(sliceText(line, 190, 240))),
+    (line) => looksLikeAdvanceDepositDetailLine(line),
     (line) => /^Totals\b/.test(line.text)
+      || line.text === "Net Totals"
+      || line.text === "Balances"
+      || line.text === "Payment Types Summary"
   );
 
-  return blocks.map((block) => ({
-    confirmation_no: firstNonEmptySlice(block, 40, 80),
-    guest_name: joinSlices(block, 105, 170),
-    check_in_date: parseShortDate(firstNonEmptySlice(block, 190, 240)),
-    rate_plan_name: joinSlices(block, 265, 330),
-    payment_method: joinSlices(block, 345, 410),
-    due_date: parseShortDate(firstNonEmptySlice(block, 435, 480)),
-    deposit_posted: normalizeAmount(firstNonEmptySlice(block, 505, 565))
-  }));
+  return blocks.map((block) => {
+    const firstLine = block[0] ?? null;
+    const guestName = normalizeAdvanceDepositGuestName(firstNonEmptyValue([
+      sliceOptionalText(firstLine, 80, 230),
+      joinSlices(block, 105, 170)
+    ]));
+    const ratePlanName = joinWrappedText([
+      sliceOptionalText(firstLine, 406, 494),
+      ...block.slice(1).map((line) => sliceText(line, 452, 495))
+    ]) ?? joinSlices(block, 265, 330);
+
+    return {
+      confirmation_no: firstNonEmptyValue([
+        sliceOptionalText(firstLine, 24, 70),
+        firstNonEmptySlice(block, 40, 80)
+      ]),
+      guest_name: guestName,
+      check_in_date: parseShortDate(firstNonEmptyValue([
+        sliceOptionalText(firstLine, 290, 338),
+        firstNonEmptySlice(block, 190, 240)
+      ])),
+      rate_plan_name: ratePlanName,
+      payment_method: firstNonEmptyValue([
+        sliceOptionalText(firstLine, 508, 548),
+        joinSlices(block, 345, 410)
+      ]),
+      due_date: parseShortDate(firstNonEmptyValue([
+        sliceOptionalText(firstLine, 616, 654),
+        firstNonEmptySlice(block, 435, 480)
+      ])),
+      deposit_posted: normalizeAmount(firstNonEmptyValue([
+        sliceOptionalText(firstLine, 772, 820),
+        firstNonEmptySlice(block, 505, 565)
+      ]))
+    };
+  });
 }
 
 function parseBookedReservations(document: PdfDocumentText): Array<Record<string, string | null>> {
@@ -4374,6 +4411,19 @@ function hasAnyNormalizedSlice(
   return slices.some(([minX, maxX]) => Boolean(normalizer(sliceText(line, minX, maxX))));
 }
 
+function looksLikeAdvanceDepositDetailLine(line: PdfLine): boolean {
+  const confirmation = firstNonEmptyValue([
+    sliceText(line, 24, 70),
+    sliceText(line, 40, 80)
+  ])?.replace(/\s+/g, "") ?? "";
+  const checkInDate = firstNonEmptyValue([
+    sliceText(line, 290, 338),
+    sliceText(line, 190, 240)
+  ]);
+
+  return /^\d{8}$/.test(confirmation) && Boolean(parseShortDate(checkInDate));
+}
+
 function isNamedDateTimeLine(text: string): boolean {
   return /^\d{2}-[A-Za-z]{3}-\d{2}\s+\d{2}:\d{2}:\d{2}\b/.test(text);
 }
@@ -4384,6 +4434,23 @@ function normalizeText(value: string | null | undefined): string | null {
   }
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized || null;
+}
+
+function normalizeAdvanceDepositGuestName(value: string | null): string | null {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const tokens = normalized.split(/\s+/);
+  while (tokens.length >= 3 && tokens[0]?.toUpperCase() === tokens[tokens.length - 1]?.toUpperCase()) {
+    tokens.pop();
+  }
+  while (tokens.length >= 2 && tokens[tokens.length - 1]?.toUpperCase() === tokens[tokens.length - 2]?.toUpperCase()) {
+    tokens.pop();
+  }
+
+  return normalizeText(tokens.join(" "));
 }
 
 function normalizeCurrencyAmount(value: string | null | undefined): string | null {
@@ -4614,6 +4681,17 @@ function normalizeNumeric(value: string): string | null {
     return cleaned;
   }
   return value.trim() || null;
+}
+
+function firstNonEmptyValue(values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    const normalized = normalizeText(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return null;
 }
 
 function normalizePercent(value: string): string | null {

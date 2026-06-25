@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { PdfDocumentText, PdfLine, PdfWord } from "../src/pdf/PdfTextExtractor.js";
-import { PdfReportParser, UnsupportedReportError, parseChoiceAuditPacketDocument } from "../src/parsers/pdfReportParser.js";
+import {
+  PdfReportParser,
+  UnsupportedReportError,
+  parseAdvanceDepositActivityDocument,
+  parseChoiceAuditPacketDocument
+} from "../src/parsers/pdfReportParser.js";
 import { normalizeDetectedPropertyName } from "../src/utils/properties.js";
 import { parseLongDate, parseShortDate } from "../src/utils/dates.js";
 
@@ -160,6 +165,118 @@ test("choice audit packet pages extract structured fields from wrapped WA184-sty
   assert.ok(rateCodeRow);
   assert.equal(rateCodeRow.value_13, "5877.94");
   assert.match(String(rateCodeRow.note), /ytd_revenue/);
+});
+
+test("advance deposit PDFs parse ellensburg-style wrapped rows", () => {
+  const document: PdfDocumentText = {
+    pageCount: 2,
+    lines: [
+      makeLine(1, 700, [[301, "Advance Deposit Activity"]]),
+      makeLine(1, 660, [[24, "Reservations"]]),
+      makeLine(1, 640, [
+        [24.3, "Confirmatio"],
+        [88.9, "Guest"],
+        [133, "First Name"],
+        [186.9, "Last Name"],
+        [242.3, "Company"],
+        [297.4, "Check In"],
+        [347.5, "Check Out"],
+        [402.7, "Rate Plan"],
+        [456.2, "Rate Plan"],
+        [508.3, "PAYMENT"],
+        [569.8, "Last 4"],
+        [617.4, "Due Date"],
+        [673.6, "Deposit"],
+        [727, "Deposit"],
+        [780.5, "Deposit"]
+      ]),
+      makeLine(1, 628, [
+        [28.1, "n Number"],
+        [89.3, "Name"],
+        [249.7, "Name"],
+        [305.4, "Date"],
+        [358.8, "Date"],
+        [410.9, "Code"],
+        [463.5, "Name"],
+        [509.2, "METHOD:"],
+        [570.2, "Digits"],
+        [670.2, "Collected"],
+        [723.7, "Collected"],
+        [785.4, "Used"]
+      ]),
+      makeLine(1, 616, [
+        [669.6, "Until Date"],
+        [729.9, "Today"]
+      ]),
+      makeLine(1, 590, [
+        [28.9, "81460423"],
+        [80.6, "JOHNSON"],
+        [140.3, "LAURA"],
+        [187.6, "JOHNSON"],
+        [296, "12-Jun-26"],
+        [349.5, "14-Jun-26"],
+        [409.6, "IDU00"],
+        [460, "TPI 00P"],
+        [511.2, "MASTER"],
+        [572.4, "9503"],
+        [667.6, "USD639.28"],
+        [725.5, "USD0.00"],
+        [778.9, "USD0.00"]
+      ]),
+      makeLine(1, 578, [
+        [86.9, "LAURA"],
+        [465.3, "LOW"]
+      ]),
+      makeLine(1, 566, [[460.8, "FENCE"]]),
+      makeLine(1, 540, [
+        [28.9, "61207964"],
+        [88, "RAINS"],
+        [136.5, "AMANDA"],
+        [194.9, "RAINS"],
+        [294.9, "31-May-26"],
+        [349.5, "01-Jun-26"],
+        [409.6, "IDU13"],
+        [456.6, "TPI 13.5P"],
+        [511.2, "MASTER"],
+        [572.4, "0243"],
+        [672, "USD0.00"],
+        [725.5, "USD0.00"],
+        [774.5, "USD171.25"]
+      ]),
+      makeLine(1, 528, [
+        [83.1, "AMANDA"],
+        [465.3, "LOW"]
+      ]),
+      makeLine(1, 516, [[460.8, "FENCE"]]),
+      makeLine(2, 700, [
+        [24, "Totals"],
+        [667.6, "USD6,824.60"],
+        [725.5, "USD0.00"],
+        [778.9, "USD336.70"]
+      ])
+    ]
+  };
+
+  const rows = parseAdvanceDepositActivityDocument(document);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0], {
+    confirmation_no: "81460423",
+    guest_name: "JOHNSON LAURA",
+    check_in_date: "2026-06-12",
+    rate_plan_name: "IDU00 TPI 00P LOW FENCE",
+    payment_method: "MASTER",
+    due_date: null,
+    deposit_posted: "0.00"
+  });
+  assert.deepEqual(rows[1], {
+    confirmation_no: "61207964",
+    guest_name: "RAINS AMANDA",
+    check_in_date: "2026-05-31",
+    rate_plan_name: "IDU13 TPI 13.5P LOW FENCE",
+    payment_method: "MASTER",
+    due_date: null,
+    deposit_posted: "171.25"
+  });
 });
 
 function createMinimalPdf(title: string): Buffer {
