@@ -633,6 +633,8 @@ await run("attachment-name fallback strips Ellensburg report suffixes before slu
       propertySlug: "holiday-inn-express-pendleton"
     }
   );
+
+  assert.equal(derivePropertyRefFromAttachmentName("05-18-26.xlsx"), null);
 });
 
 await run("best western daily report parses into franchise-specific rows", async () => {

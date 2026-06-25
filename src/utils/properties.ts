@@ -1,3 +1,5 @@
+import { parseLongDate, parseShortDate } from "./dates.js";
+
 export const UNASSIGNED_PROPERTY_NAME = "Unassigned Property";
 export const UNASSIGNED_PROPERTY_SLUG = "unassigned-property";
 
@@ -114,9 +116,22 @@ export function derivePropertyRefFromAttachmentName(attachmentName: string): { p
   const propertyName = normalizePropertyName(spaced);
   const propertySlug = slugifyPropertyName(propertyName);
 
-  if (!propertyName || !propertySlug) {
+  if (!propertyName || !propertySlug || looksLikeStandaloneDateLabel(propertyName)) {
     return null;
   }
 
   return { propertyName, propertySlug };
+}
+
+function looksLikeStandaloneDateLabel(value: string): boolean {
+  const normalized = normalizePropertyName(value);
+  if (!normalized) {
+    return false;
+  }
+
+  if (parseShortDate(normalized) || parseLongDate(normalized)) {
+    return true;
+  }
+
+  return /^\d{1,2}[-/._\s]\d{1,2}[-/._\s]\d{2,4}$/.test(normalized);
 }

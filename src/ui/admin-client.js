@@ -476,7 +476,7 @@ async function triggerRun() {
   } catch (error) {
     const activeRunId = Number(error && error.activeRunId);
     if (Number.isInteger(activeRunId) && activeRunId > 0) {
-      await refreshDashboard(`Another mailbox scan is already running. Polling run #${activeRunId}.`);
+      await refreshDashboard(`Another ingestion run is already running. Polling run #${activeRunId}.`);
       ensureRunPolling(activeRunId);
       return;
     }
@@ -492,12 +492,16 @@ async function triggerReparse() {
 
   try {
     const result = await fetchJson("/api/ingest/reparse", { method: "POST" });
-    const statusLabel = result.status === "completed"
-      ? `Stored reports reparsed. Run #${result.runId} rebuilt the local staging data.`
-      : `Stored report reparse finished with failures. Run #${result.runId}.`;
-
-    await refreshDashboard(statusLabel);
+    await refreshDashboard(`Starting stored report reparse. Polling run #${result.runId}.`);
+    ensureRunPolling(Number(result.runId));
   } catch (error) {
+    const activeRunId = Number(error && error.activeRunId);
+    if (Number.isInteger(activeRunId) && activeRunId > 0) {
+      await refreshDashboard(`Another ingestion run is already running. Polling run #${activeRunId}.`);
+      ensureRunPolling(activeRunId);
+      return;
+    }
+
     renderError(error);
   } finally {
     setLoading(false);
@@ -677,7 +681,7 @@ async function pollRunStatus(runId, runPollToken) {
 
     if (run.status === "running" && run.active === true) {
       if (heroStatus) {
-        heroStatus.textContent = `Mailbox scan is running in the background. Polling run #${runId}.`;
+        heroStatus.textContent = getRunPollingMessage(run, runId);
       }
       renderOverview();
       renderLatestRun();
@@ -693,8 +697,8 @@ async function pollRunStatus(runId, runPollToken) {
     }
 
     const statusLabel = run.status === "completed"
-      ? `Mailbox scan completed. Run #${runId} finished successfully.`
-      : `Mailbox scan finished with failures. Run #${runId}.`;
+      ? getRunCompletionMessage(run, runId)
+      : getRunFailureMessage(run, runId);
     await refreshDashboard(statusLabel);
   } catch (_error) {
     if (runPollToken !== state.runPollToken || state.activeRunId !== runId) {
@@ -1108,6 +1112,7 @@ function renderLatestRun() {
   latestRunBadge.className = `badge ${getRunTone(state.latestRun.status)}`;
 
   const summaryCards = [
+    ["Run Type", getRunDisplayName(state.latestRun)],
     ["Messages Seen", state.latestRun.messages_seen],
     ["Attachments Seen", state.latestRun.attachments_seen],
     ["Approved", state.latestRun.attachments_approved],
@@ -1131,7 +1136,7 @@ function renderLatestRun() {
     runNotes.innerHTML = `<strong>Run notes</strong><ul class="note-list">${notes.map((note) => `<li>${escapeHtml(String(note))}</li>`).join("")}</ul>`;
   } else if (state.latestRun.status === "running") {
     runNotes.className = "notes-block empty";
-    runNotes.textContent = "Run is still in progress. Approved, not approved, and deferred counts update live while the mailbox scan is running.";
+    runNotes.textContent = getRunPendingNotesMessage(state.latestRun);
   } else {
     runNotes.className = "notes-block empty";
     runNotes.textContent = "No warnings or notes were recorded for the latest run.";
@@ -1140,7 +1145,7 @@ function renderLatestRun() {
   const attachments = Array.isArray(state.latestRun.attachments) ? state.latestRun.attachments : [];
   if (attachments.length === 0) {
     attachmentList.innerHTML = state.latestRun.status === "running"
-      ? '<div class="empty">Attachment details will load after the live mailbox scan finishes.</div>'
+      ? `<div class="empty">${escapeHtml(getRunPendingAttachmentMessage(state.latestRun))}</div>`
       : '<div class="empty">No attachment records were captured for the latest run.</div>';
     return;
   }
@@ -2448,10 +2453,63 @@ async function fetchJson(url, options) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || `HTTP ${response.status}`);
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    if (payload && typeof payload === "object") {
+      Object.assign(error, payload);
+    }
+    throw error;
   }
 
   return payload;
+}
+
+function getRunDisplayName(run) {
+  const triggerSource = run && typeof run.trigger_source === "string" ? run.trigger_source : "";
+  if (triggerSource === "reparse") {
+    return "Stored Report Reparse";
+  }
+  if (triggerSource === "scheduled") {
+    return "Scheduled Mailbox Scan";
+  }
+  if (triggerSource === "test") {
+    return "Test Run";
+  }
+  return "Mailbox Scan";
+}
+
+function getRunPollingMessage(run, runId) {
+  if (run && run.trigger_source === "reparse") {
+    return `Stored report reparse is running in the background. Polling run #${runId}.`;
+  }
+  return `Mailbox scan is running in the background. Polling run #${runId}.`;
+}
+
+function getRunCompletionMessage(run, runId) {
+  if (run && run.trigger_source === "reparse") {
+    return `Stored report reparse completed. Run #${runId} rebuilt the local staging data.`;
+  }
+  return `Mailbox scan completed. Run #${runId} finished successfully.`;
+}
+
+function getRunFailureMessage(run, runId) {
+  if (run && run.trigger_source === "reparse") {
+    return `Stored report reparse finished with failures. Run #${runId}.`;
+  }
+  return `Mailbox scan finished with failures. Run #${runId}.`;
+}
+
+function getRunPendingNotesMessage(run) {
+  if (run && run.trigger_source === "reparse") {
+    return "Run is still in progress. Parsed, deferred, and failed counts update live while stored files are reparsed.";
+  }
+  return "Run is still in progress. Approved, not approved, and deferred counts update live while the mailbox scan is running.";
+}
+
+function getRunPendingAttachmentMessage(run) {
+  if (run && run.trigger_source === "reparse") {
+    return "Attachment details will load after the stored report reparse finishes.";
+  }
+  return "Attachment details will load after the live mailbox scan finishes.";
 }
 
 function getRunTone(status) {

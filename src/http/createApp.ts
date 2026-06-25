@@ -509,17 +509,28 @@ export function createApp(
     }
   });
 
-  app.post("/api/ingest/reparse", async (_request, response) => {
+  app.post("/api/ingest/reparse", (_request, response) => {
     if (!requireAdminUser(response)) {
       return;
     }
 
     try {
-      const result = await ingestionService.reparseStoredReports();
-      response.status(result.status === "completed" ? 200 : 500).json(result);
+      const result = ingestionService.startReparseRun();
+      response.status(202).json({
+        ...result,
+        active: true
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      response.status(error instanceof ReparseOperationError ? 409 : 500).json({ error: message });
+      if (error instanceof ReparseOperationError) {
+        response.status(409).json({
+          error: message,
+          activeRunId: ingestionService.getActiveRunId()
+        });
+        return;
+      }
+
+      response.status(500).json({ error: message });
     }
   });
 

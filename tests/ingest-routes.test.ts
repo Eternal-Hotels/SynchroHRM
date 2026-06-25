@@ -9,8 +9,8 @@ import type { AppConfig } from "../src/config.js";
 import { AuthService } from "../src/auth/AuthService.js";
 import { AppDatabase } from "../src/db/Database.js";
 import { createApp } from "../src/http/createApp.js";
-import { IngestionService } from "../src/services/IngestionService.js";
-import type { MailAttachmentSource, PullAttachmentsResult } from "../src/types.js";
+import { IngestionService, ReparseOperationError } from "../src/services/IngestionService.js";
+import type { MailAttachmentSource, PullAttachmentsResult, RunSummary } from "../src/types.js";
 
 test("manual scan starts in the background and can be polled by run id", async () => {
   const scanStarted = createDeferred<void>();
@@ -135,6 +135,64 @@ test("manual scan starts in the background and can be polled by run id", async (
   }
 });
 
+test("stored report reparse starts in the background and can be polled by run id", async () => {
+  const context = await createBlockingReparseRouteTestContext();
+
+  try {
+    const adminCookie = await loginAdmin(context.baseUrl);
+    const startResponse = await fetch(`${context.baseUrl}/api/ingest/reparse`, {
+      method: "POST",
+      headers: {
+        cookie: adminCookie
+      }
+    });
+    assert.equal(startResponse.status, 202);
+    const startPayload = await startResponse.json() as Record<string, unknown>;
+    assert.equal(startPayload.status, "running");
+    assert.equal(startPayload.triggerSource, "reparse");
+    assert.equal(startPayload.active, true);
+    assert.ok(Number.isInteger(startPayload.runId));
+
+    const runId = Number(startPayload.runId);
+    await context.waitForReparseStart();
+
+    const latestRun = await fetchJsonAbsolute(`${context.baseUrl}/api/runs/latest`, adminCookie);
+    assert.equal(latestRun.id, runId);
+    assert.equal(latestRun.status, "running");
+    assert.equal(latestRun.trigger_source, "reparse");
+    assert.equal(latestRun.active, true);
+
+    const progress = await fetchJsonAbsolute(`${context.baseUrl}/api/runs/${runId}/progress`, adminCookie);
+    assert.equal(progress.id, runId);
+    assert.equal(progress.status, "running");
+    assert.equal(progress.trigger_source, "reparse");
+    assert.equal(progress.active, true);
+
+    const conflictResponse = await fetch(`${context.baseUrl}/api/ingest/reparse`, {
+      method: "POST",
+      headers: {
+        cookie: adminCookie
+      }
+    });
+    assert.equal(conflictResponse.status, 409);
+    const conflictPayload = await conflictResponse.json() as Record<string, unknown>;
+    assert.equal(conflictPayload.activeRunId, runId);
+    assert.match(String(conflictPayload.error ?? ""), /active ingestion run/i);
+
+    context.finishReparse();
+
+    const completedRun = await waitForRun(context.baseUrl, adminCookie, runId, (run) => run.status !== "running");
+    assert.equal(completedRun.status, "completed");
+    assert.equal(completedRun.trigger_source, "reparse");
+    assert.equal(completedRun.active, false);
+    assert.equal(completedRun.attachments_parsed, 2);
+    assert.equal(completedRun.attachments_deferred, 1);
+  } finally {
+    context.finishReparse();
+    await context.dispose();
+  }
+});
+
 async function createRouteTestContext(source: MailAttachmentSource): Promise<{
   baseUrl: string;
   dispose: () => Promise<void>;
@@ -155,6 +213,41 @@ async function createRouteTestContext(source: MailAttachmentSource): Promise<{
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     dispose: async () => {
+      for (let attempt = 0; attempt < 100 && service.getActiveRunId() !== null; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await closeServer(server);
+      database.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  };
+}
+
+async function createBlockingReparseRouteTestContext(): Promise<{
+  baseUrl: string;
+  waitForReparseStart: () => Promise<number>;
+  finishReparse: () => void;
+  dispose: () => Promise<void>;
+}> {
+  const root = await mkdtemp(path.join(tmpdir(), "synchro-reparse-routes-"));
+  const dataDir = path.join(root, "storage");
+  const database = await AppDatabase.open(path.join(dataDir, "app.sqlite"));
+  const authService = new AuthService(database);
+  const adminUser = database.getUserByUsername("admin");
+  assert.ok(adminUser);
+  authService.updateUserPassword(Number(adminUser.id), "AdminPass123!");
+
+  const service = new BlockingReparseIngestionService(database, dataDir);
+  const app = createApp(mockConfig(), database, service, authService);
+  const server = await listen(app);
+  const port = (server.address() as AddressInfo).port;
+
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    waitForReparseStart: () => service.waitForReparseStart(),
+    finishReparse: () => service.finishReparse(),
+    dispose: async () => {
+      service.finishReparse();
       for (let attempt = 0; attempt < 100 && service.getActiveRunId() !== null; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
@@ -256,6 +349,91 @@ function createDeferred<T>() {
     promise,
     resolve: (value?: T) => resolvePromise(value as T),
     reject: (reason?: unknown) => rejectPromise(reason)
+  };
+}
+
+class BlockingReparseIngestionService extends IngestionService {
+  private readonly reparseStarted = createDeferred<number>();
+  private readonly releaseReparse = createDeferred<void>();
+  private activeReparseRunId: number | null = null;
+
+  constructor(
+    private readonly routeTestDatabase: AppDatabase,
+    dataDir: string
+  ) {
+    super(routeTestDatabase, {
+      async pullAttachments() {
+        return {
+          attachments: [],
+          nextDeltaToken: null,
+          deltaWasReset: false,
+          messagesSeen: 0
+        };
+      }
+    }, dataDir);
+  }
+
+  override startReparseRun(): { runId: number; status: "running"; triggerSource: "reparse" } {
+    if (this.activeReparseRunId !== null) {
+      throw new ReparseOperationError("Please wait for the active ingestion run to finish before reparsing stored reports.");
+    }
+
+    const runId = this.routeTestDatabase.createRun("reparse");
+    this.activeReparseRunId = runId;
+    this.routeTestDatabase.updateRunProgress(runId, emptySummary());
+
+    void (async () => {
+      this.reparseStarted.resolve(runId);
+      await this.releaseReparse.promise;
+      const summary: RunSummary = {
+        ...emptySummary(),
+        messagesSeen: 3,
+        attachmentsSeen: 3,
+        attachmentsApproved: 3,
+        attachmentsParsed: 2,
+        attachmentsDeferred: 1
+      };
+      this.routeTestDatabase.finishRun(runId, "completed", summary);
+      if (this.activeReparseRunId === runId) {
+        this.activeReparseRunId = null;
+      }
+    })();
+
+    return {
+      runId,
+      status: "running",
+      triggerSource: "reparse"
+    };
+  }
+
+  override getActiveRunId(): number | null {
+    return this.activeReparseRunId ?? super.getActiveRunId();
+  }
+
+  override isRunActive(runId: number): boolean {
+    return this.activeReparseRunId === runId || super.isRunActive(runId);
+  }
+
+  async waitForReparseStart(): Promise<number> {
+    return this.reparseStarted.promise;
+  }
+
+  finishReparse(): void {
+    this.releaseReparse.resolve();
+  }
+}
+
+function emptySummary(): RunSummary {
+  return {
+    messagesSeen: 0,
+    attachmentsSeen: 0,
+    attachmentsApproved: 0,
+    attachmentsNotApproved: 0,
+    attachmentsArchived: 0,
+    attachmentsParsed: 0,
+    attachmentsDeferred: 0,
+    attachmentsFailed: 0,
+    notes: []
   };
 }
 

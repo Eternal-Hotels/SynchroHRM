@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { AppDatabase } from "../db/Database.js";
-import { PdfReportParser, UnsupportedReportError, type PdfAnalysis } from "../parsers/pdfReportParser.js";
+import { PdfReportParser, UnsupportedReportError } from "../parsers/pdfReportParser.js";
+import { WorkbookReportParser } from "../parsers/workbookReportParser.js";
 import type {
   IncomingAttachment,
   IngestionRunResult,
   MailAttachmentSource,
+  ParsedReport,
   RunSummary,
   TriggerSource
 } from "../types.js";
@@ -33,8 +35,17 @@ interface PreparedAttachment {
   propertySlug: string | null;
   reportTitle: string | null;
   reportDate: string | null;
-  parsedReport: PdfAnalysis["parsedReport"];
+  parsedReport: ParsedReport | null;
   preparationError: Error | null;
+}
+
+interface AttachmentAnalysis {
+  propertyName: string | null;
+  propertySlug: string | null;
+  reportDate: string | null;
+  reportTitle: string | null;
+  parsedReport: ParsedReport | null;
+  error: Error | null;
 }
 
 interface PropertyMoveRequest {
@@ -94,6 +105,7 @@ export class IngestionOperationError extends Error {
 
 export class IngestionService {
   private readonly parser = new PdfReportParser();
+  private readonly workbookParser = new WorkbookReportParser();
   private readonly exportService: ExportService;
   private activeRun: ActiveRunState | null = null;
 
@@ -155,6 +167,15 @@ export class IngestionService {
     };
   }
 
+  startReparseRun(): { runId: number; status: "running"; triggerSource: "reparse" } {
+    const activeRun = this.startStoredReportReparse();
+    return {
+      runId: activeRun.runId,
+      status: "running",
+      triggerSource: "reparse"
+    };
+  }
+
   getActiveRunId(): number | null {
     return this.activeRun?.runId ?? null;
   }
@@ -171,11 +192,7 @@ export class IngestionService {
   }
 
   async reparseStoredReports(): Promise<IngestionRunResult> {
-    if (this.activeRun) {
-      throw new ReparseOperationError("Please wait for the active inbox sync to finish before reparsing stored reports.");
-    }
-
-    return this.startExclusiveRun("reparse", (runId) => this.reparseStoredReportsInternal(runId)).promise;
+    return this.startStoredReportReparse().promise;
   }
 
   async retryAttachmentParse(attachmentId: number): Promise<AttachmentRetryResult> {
@@ -216,9 +233,9 @@ export class IngestionService {
       propertySlug: existingPropertySlug
     });
 
-    let analysis: PdfAnalysis | null = null;
+    let analysis: AttachmentAnalysis | null = null;
     try {
-      analysis = await this.parser.analyze(bytes);
+      analysis = await this.analyzeAttachment(bytes, extension);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.database.updateAttachment(attachmentId, {
@@ -239,10 +256,22 @@ export class IngestionService {
       };
     }
 
-    const property = ensurePropertyRef({
-      propertyName: analysis.propertyName ?? fallbackProperty?.propertyName ?? existingPropertyName ?? null,
-      propertySlug: analysis.propertySlug ?? fallbackProperty?.propertySlug ?? existingPropertySlug ?? null
-    });
+    if (!analysis) {
+      throw new AttachmentRetryError("Only PDF and XLSX attachments can be retried.");
+    }
+
+    const property = resolveReprocessedPropertyRef(
+      extension,
+      {
+        propertyName: analysis.propertyName,
+        propertySlug: analysis.propertySlug
+      },
+      {
+        propertyName: existingPropertyName,
+        propertySlug: existingPropertySlug
+      },
+      fallbackProperty
+    );
     const reportTitle = analysis.reportTitle ?? existingReportTitle;
     const reportDate = resolveAttachmentReportDate(
       String(attachment.attachment_name ?? ""),
@@ -410,6 +439,14 @@ export class IngestionService {
     } satisfies ActiveRunState;
     this.activeRun = activeRun;
     return activeRun;
+  }
+
+  private startStoredReportReparse(): ActiveRunState {
+    if (this.activeRun) {
+      throw new ReparseOperationError("Please wait for the active ingestion run to finish before reparsing stored reports.");
+    }
+
+    return this.startExclusiveRun("reparse", (runId) => this.reparseStoredReportsInternal(runId));
   }
 
   private persistRunProgress(runId: number, summary: RunSummary): void {
@@ -635,20 +672,24 @@ export class IngestionService {
     });
     summary.attachmentsArchived += 1;
 
-    if (extension === ".xlsx") {
-      this.database.updateAttachment(recordId, {
-        propertyName: property.propertyName,
-        propertySlug: property.propertySlug,
-        status: "deferred",
-        reportTitle: prepared.reportTitle,
-        reportDate: resolvedReportDate,
-        parseError: "XLSX parsing is intentionally deferred in v1."
-      });
-      summary.attachmentsDeferred += 1;
-      return;
-    }
-
     try {
+      if (extension === ".xlsx" && prepared.preparationError && !(prepared.preparationError instanceof UnsupportedReportError)) {
+        throw prepared.preparationError;
+      }
+
+      if (extension === ".xlsx" && !prepared.parsedReport) {
+        this.database.updateAttachment(recordId, {
+          propertyName: property.propertyName,
+          propertySlug: property.propertySlug,
+          status: "deferred",
+          reportTitle: prepared.reportTitle,
+          reportDate: resolvedReportDate,
+          parseError: prepared.preparationError?.message ?? "Workbook parsing is not supported for this XLSX family yet."
+        });
+        summary.attachmentsDeferred += 1;
+        return;
+      }
+
       if (!prepared.parsedReport) {
         throw prepared.preparationError ?? new UnsupportedReportError("The PDF title does not match any known report family.");
       }
@@ -717,6 +758,17 @@ export class IngestionService {
     }
   }
 
+  private async analyzeAttachment(bytes: Buffer, extension: string): Promise<AttachmentAnalysis | null> {
+    if (extension === ".pdf") {
+      return this.parser.analyze(bytes);
+    }
+    if (extension === ".xlsx") {
+      return this.workbookParser.analyze(bytes);
+    }
+
+    return null;
+  }
+
   private async archiveAttachment(attachment: IncomingAttachment, property: PropertyRef): Promise<string> {
     const receivedDay = attachment.message.receivedAt.slice(0, 10);
     const resolved = ensurePropertyRef(property);
@@ -734,7 +786,7 @@ export class IngestionService {
   private async prepareAttachments(attachments: IncomingAttachment[]): Promise<PreparedAttachment[]> {
     const prepared = await Promise.all(attachments.map(async (attachment) => {
       const extension = path.extname(attachment.attachmentName).toLowerCase();
-      if (extension !== ".pdf") {
+      if (![".pdf", ".xlsx"].includes(extension)) {
         return {
           attachment,
           propertyName: null,
@@ -747,7 +799,19 @@ export class IngestionService {
       }
 
       try {
-        const analysis = await this.parser.analyze(attachment.bytes);
+        const analysis = await this.analyzeAttachment(attachment.bytes, extension);
+        if (!analysis) {
+          return {
+            attachment,
+            propertyName: null,
+            propertySlug: null,
+            reportTitle: null,
+            reportDate: null,
+            parsedReport: null,
+            preparationError: null
+          } satisfies PreparedAttachment;
+        }
+
         const fallbackProperty = derivePropertyRefFromAttachmentName(attachment.attachmentName);
         return {
           attachment,
@@ -857,29 +921,44 @@ export class IngestionService {
 
     const bytes = await readFile(archivedPath);
 
-    if (extension === ".xlsx") {
-      this.database.updateAttachment(attachmentId, {
-        ingestRunId: runId,
-        propertyName: property.propertyName,
-        propertySlug: property.propertySlug,
-        status: "deferred",
-        reportType: null,
-        reportTitle: typeof attachment.report_title === "string" ? attachment.report_title : null,
-        reportDate,
-        parsedJsonPath: null,
-        quarantinePath: null,
-        parseError: "XLSX parsing is intentionally deferred in v1."
-      });
-      summary.attachmentsDeferred += 1;
-      return;
-    }
-
     try {
-      const analysis = await this.parser.analyze(bytes);
-      const refreshedProperty = ensurePropertyRef({
-        propertyName: analysis.propertyName ?? fallbackProperty?.propertyName ?? existingPropertyName ?? null,
-        propertySlug: analysis.propertySlug ?? fallbackProperty?.propertySlug ?? existingPropertySlug ?? null
-      });
+      const analysis = await this.analyzeAttachment(bytes, extension);
+      if (!analysis) {
+        throw new UnsupportedReportError(`Unsupported attachment extension for reparse: ${extension}`);
+      }
+
+      const refreshedProperty = resolveReprocessedPropertyRef(
+        extension,
+        {
+          propertyName: analysis.propertyName,
+          propertySlug: analysis.propertySlug
+        },
+        {
+          propertyName: existingPropertyName,
+          propertySlug: existingPropertySlug
+        },
+        fallbackProperty
+      );
+
+      if (extension === ".xlsx" && !analysis.parsedReport) {
+        this.database.updateAttachment(attachmentId, {
+          ingestRunId: runId,
+          propertyName: refreshedProperty.propertyName,
+          propertySlug: refreshedProperty.propertySlug,
+          status: "deferred",
+          reportType: null,
+          reportTitle: analysis.reportTitle ?? (typeof attachment.report_title === "string" ? attachment.report_title : null),
+          reportDate: resolveAttachmentReportDate(
+            attachmentName,
+            analysis.reportDate ?? (typeof attachment.report_date === "string" ? attachment.report_date : null)
+          ),
+          parsedJsonPath: null,
+          quarantinePath: null,
+          parseError: analysis.error?.message ?? "Workbook parsing is not supported for this XLSX family yet."
+        });
+        summary.attachmentsDeferred += 1;
+        return;
+      }
 
       if (!analysis.parsedReport) {
         const reason = analysis.error?.message ?? "The PDF title does not match any known report family.";
@@ -1106,3 +1185,31 @@ function parseDateFromAttachmentName(attachmentName: string): string | null {
   return parseLongDate(match[1]);
 }
 
+function resolveReprocessedPropertyRef(
+  extension: string,
+  detected: PropertyRef | null | undefined,
+  existing: PropertyRef | null | undefined,
+  fallback: PropertyRef | null | undefined
+): { propertyName: string; propertySlug: string } {
+  const existingAssigned = hasAssignedProperty(existing);
+
+  if (extension !== ".xlsx" && existingAssigned) {
+    return ensurePropertyRef(existing);
+  }
+
+  return ensurePropertyRef({
+    propertyName: detected?.propertyName ?? fallback?.propertyName ?? existing?.propertyName ?? null,
+    propertySlug: detected?.propertySlug ?? fallback?.propertySlug ?? existing?.propertySlug ?? null
+  });
+}
+
+function hasAssignedProperty(property: PropertyRef | null | undefined): boolean {
+  const propertyName = normalizePropertyName(property?.propertyName);
+  const propertySlug = slugifyPropertyName(property?.propertySlug ?? propertyName);
+  return Boolean(
+    propertyName
+    && propertySlug
+    && propertyName !== UNASSIGNED_PROPERTY_NAME
+    && propertySlug !== UNASSIGNED_PROPERTY_SLUG
+  );
+}
