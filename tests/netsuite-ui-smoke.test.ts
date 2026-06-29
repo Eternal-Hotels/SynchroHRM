@@ -47,13 +47,17 @@ test("admin NetSuite settings UI wires the expected fields and endpoints", async
   assert.match(html, /id="netsuite-property-list"/);
   assert.match(html, /id="netsuite-report-type-select"/);
   assert.match(html, /id="netsuite-attachment-select"/);
-  assert.match(html, /id="netsuite-posting-balancing-gl"/);
+  assert.match(html, /id="netsuite-posting-units-type-id"/);
+  assert.match(html, /id="netsuite-posting-unit-id"/);
+  assert.match(html, /id="netsuite-posting-sync-button"/);
   assert.match(html, /id="netsuite-posting-preview-button"/);
   assert.match(html, /id="netsuite-posting-submit-button"/);
+  assert.match(html, /Sync Statistical Accounts/);
   assert.match(client, /\/api\/settings\/netsuite/);
   assert.match(client, /\/api\/settings\/netsuite\/test/);
   assert.match(client, /\/api\/settings\/netsuite\/debug\/metadata-catalog\/export/);
   assert.match(client, /\/api\/netsuite\/properties/);
+  assert.match(client, /\/api\/netsuite\/properties\/.*\/statistical-accounts\/sync/);
   assert.match(client, /\/api\/users/);
   assert.match(client, /\/api\/netsuite\/properties\/.*\/preview/);
   assert.match(client, /\/api\/netsuite\/properties\/.*\/runs\/.*\/submit/);

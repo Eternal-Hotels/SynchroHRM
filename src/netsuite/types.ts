@@ -48,7 +48,7 @@ export interface NetSuiteCatalogExportResult {
   errorMessage: string | null;
 }
 
-export interface NetSuiteJournalEntryResponse {
+export interface NetSuiteRecordResponse {
   id: string;
   tranId: string;
   location: string;
@@ -56,7 +56,40 @@ export interface NetSuiteJournalEntryResponse {
 
 export interface NetSuiteJournalEntryResult {
   httpStatus: number;
-  journalEntry: NetSuiteJournalEntryResponse;
+  journalEntry: NetSuiteRecordResponse;
+  raw: Record<string, unknown> | null;
+}
+
+export interface NetSuiteStatisticalJournalEntryResult {
+  httpStatus: number;
+  journalEntry: NetSuiteRecordResponse;
+  raw: Record<string, unknown> | null;
+}
+
+export interface NetSuiteAccountResponse {
+  id: string;
+  acctNumber: string;
+  acctName: string;
+  externalId: string;
+  location: string;
+}
+
+export interface NetSuiteStatisticalAccountResult {
+  httpStatus: number;
+  account: NetSuiteAccountResponse;
+  raw: Record<string, unknown> | null;
+}
+
+export interface NetSuiteAccountLookupRecord {
+  id: string;
+  acctNumber: string;
+  acctName: string;
+  externalId: string;
+}
+
+export interface NetSuiteStatisticalAccountLookupResult {
+  byAccountNumber: Record<string, NetSuiteAccountLookupRecord>;
+  byExternalId: Record<string, NetSuiteAccountLookupRecord>;
   raw: Record<string, unknown> | null;
 }
 

@@ -450,6 +450,20 @@ test("NetSuite posting routes are available to any authenticated console user", 
     });
     assert.equal(viewerPreview.status, 404);
 
+    const viewerSync = await fetch(`${context.baseUrl}/api/netsuite/properties/test-property/statistical-accounts/sync`, {
+      method: "POST",
+      headers: {
+        cookie: viewerCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        attachmentId: 1,
+        mappings: [],
+        defaults: {}
+      })
+    });
+    assert.equal(viewerSync.status, 404);
+
     const viewerSubmit = await fetch(`${context.baseUrl}/api/netsuite/properties/test-property/runs/test-run/submit`, {
       method: "POST",
       headers: { cookie: viewerCookie }
@@ -460,30 +474,50 @@ test("NetSuite posting routes are available to any authenticated console user", 
   }
 });
 
-test("NetSuite posting workspace discovers broad report metrics, builds previews without balancing, and submits them", async () => {
-  let requestCount = 0;
+test("NetSuite statistical workspace syncs accounts, builds previews, and submits statistical journals across parsed properties", async () => {
+  const createdAccounts: Array<{ id: string; acctNumber: string; acctName: string; externalId: string }> = [];
+  let tokenCounter = 0;
+  let accountCounter = 0;
+  let journalCounter = 0;
   const context = await createRouteTestContext({
-    fetchImpl: async (input) => {
-      requestCount += 1;
+    fetchImpl: async (input, init) => {
       const url = String(input);
       if (url.endsWith("/services/rest/auth/oauth2/v1/token")) {
-        return mockResponse(200, { access_token: `token-${requestCount}` });
+        tokenCounter += 1;
+        return mockResponse(200, { access_token: `token-${tokenCounter}` });
       }
       if (url.includes("/services/rest/query/v1/suiteql")) {
-        return mockResponse(200, {
-          items: [
-            { id: "101", acctnumber: "4000" },
-            { id: "202", acctnumber: "2100" },
-            { id: "303", acctnumber: "9999" }
-          ]
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as { q?: string } : {};
+        const query = String(body.q || "");
+        const items = createdAccounts.filter((entry) => query.includes(entry.acctNumber) || query.includes(entry.externalId)).map((entry) => ({
+          id: entry.id,
+          acctnumber: entry.acctNumber,
+          acctname: entry.acctName,
+          externalid: entry.externalId
+        }));
+        return mockResponse(200, { items });
+      }
+      if (url.endsWith("/services/rest/record/v1/account")) {
+        accountCounter += 1;
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+        const account = {
+          id: `700${accountCounter}`,
+          acctNumber: String(body.acctNumber || ""),
+          acctName: String(body.acctName || ""),
+          externalId: String(body.externalId || "")
+        };
+        createdAccounts.push(account);
+        return mockResponse(201, account, {
+          location: `https://1234567.suitetalk.api.netsuite.com/services/rest/record/v1/account/${account.id}`
         });
       }
-      if (url.endsWith("/services/rest/record/v1/journalEntry")) {
+      if (url.endsWith("/services/rest/record/v1/statisticaljournalentry")) {
+        journalCounter += 1;
         return mockResponse(201, {
-          id: "9981",
-          tranId: "JE1001"
+          id: `990${journalCounter}`,
+          tranId: `SJ10${journalCounter}`
         }, {
-          location: "https://1234567.suitetalk.api.netsuite.com/services/rest/record/v1/journalEntry/9981"
+          location: `https://1234567.suitetalk.api.netsuite.com/services/rest/record/v1/statisticaljournalentry/990${journalCounter}`
         });
       }
       return mockResponse(404, { error: "Unexpected request" });
@@ -491,240 +525,83 @@ test("NetSuite posting workspace discovers broad report metrics, builds previews
   });
 
   try {
-    const attachmentRecordId = seedParsedAttachment(context.database, {
-      propertyName: "Holiday Inn Express Pendleton",
-      propertySlug: "holiday-inn-express-pendleton",
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "credit_card_transaction_rows",
+      reportTitle: "Credit Card Transactions",
+      reportDate: "2026-05-31",
+      attachmentName: "CreditCardBatchReport.pdf",
+      rows: [
+        { card_type: "VS", charge_amount: "200.00", credit_amount: "0.00", transaction_status: "Settled" },
+        { card_type: "MC", charge_amount: "18.75", credit_amount: "0.00", transaction_status: "Settled" },
+        { card_type: "VS", charge_amount: "0.00", credit_amount: "25.00", transaction_status: "Settled" }
+      ]
+    });
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "best_western_daily_report_rows",
+      reportTitle: "Daily Report",
+      reportDate: "2026-05-31",
+      attachmentName: "DailyReport.pdf",
+      rows: [
+        { section: "Statistical Recap", row_kind: "metric", metric_name: "Occupied", today_value: "23", mtd_value: "949", ytd_value: "3789" },
+        { section: "Statistical Recap", row_kind: "metric", metric_name: "No Show", today_value: "0", mtd_value: "2", ytd_value: "25" },
+        { section: "Detail Listing", subsection: "Guest Ledger", group_name: "GL ROOM REV", row_kind: "detail", posting_code: "AR", posting_description: "ROOM CHARGE", today_value: "4125.44", mtd_value: "125447.11", ytd_value: "482995.37" }
+      ]
+    });
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "operator_transaction_rows",
+      reportTitle: "Operator Transactions",
+      reportDate: "2026-05-31",
+      attachmentName: "OperatorTransactionsReport.pdf",
+      rows: [
+        { transaction_code: "VS", transaction_description: "PAYMENT VISA/MC 121-A", amount: "-100.00", adjustment_amount: "0.00" },
+        { transaction_code: "CASH", transaction_description: "PAYMENT CASH", amount: "1.00", adjustment_amount: "0.00" }
+      ]
+    });
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "daily_transaction_log_rows",
+      reportTitle: "Daily Transaction Log",
+      reportDate: "2026-05-31",
+      attachmentName: "TransactionLogReport.pdf",
+      rows: [
+        { transaction_code: "VS", transaction_description: "PAYMENT VISA/MC", posted_amount: "-145.00", adjusted_amount: "0.00" },
+        { transaction_code: "ROOM", transaction_description: "ROOM REVENUE", posted_amount: "250.00", adjusted_amount: "0.00" }
+      ]
+    });
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "room_tax_listing_rows",
+      reportTitle: "Room and Tax Report",
+      reportDate: "2026-05-31",
+      attachmentName: "RoomAndTaxReport.pdf",
+      rows: [
+        { charge_type: "ROOM RATE", room_charge: "516.46", tax_amount: "0.00" },
+        { charge_type: "ROOM TAX", room_charge: "0.00", tax_amount: "53.71" }
+      ]
+    });
+    seedParsedAttachment(context.database, {
+      propertyName: "Holiday Inn Express Lexington",
+      propertySlug: "holiday-inn-express-lexington",
       reportType: "all_transaction_rows",
       reportTitle: "All Transactions",
-      reportDate: "2026-05-22",
-      attachmentName: "May 22, 2026-all-transactions.pdf",
+      reportDate: "2026-05-31",
+      attachmentName: "AllTransactionsReport.pdf",
       rows: [
-        {
-          section: "Reservations",
-          transaction_date: "2026-05-22",
-          transaction_time: "12:28:05",
-          confirmation_no: "20645151",
-          guest_name: "DAUER JOEL",
-          room_number: "221",
-          folio_number: "015316",
-          transaction_code: "RR",
-          transaction_description: "Guest",
-          last_four_digits: null,
-          transaction_type: "CHARGE",
-          charge_type: "ROOM",
-          amount: "149.00",
-          username: "systemuser",
-          note: "ROOM RENT"
-        },
-        {
-          section: "Reservations",
-          transaction_date: "2026-05-22",
-          transaction_time: "12:28:05",
-          confirmation_no: "20645151",
-          guest_name: "DAUER JOEL",
-          room_number: "221",
-          folio_number: "015316",
-          transaction_code: "CT",
-          transaction_description: "City Tax",
-          last_four_digits: null,
-          transaction_type: "TAX",
-          charge_type: "ROOM",
-          amount: "11.92",
-          username: "systemuser",
-          note: "RENT"
-        },
-        {
-          section: "Reservations",
-          transaction_date: "2026-05-22",
-          transaction_time: "12:28:05",
-          confirmation_no: "20645151",
-          guest_name: "DAUER JOEL",
-          room_number: "221",
-          folio_number: "015316",
-          transaction_code: "ST",
-          transaction_description: "State Tax",
-          last_four_digits: null,
-          transaction_type: "TAX",
-          charge_type: "ROOM",
-          amount: "3.08",
-          username: "systemuser",
-          note: "RENT"
-        }
+        { transaction_type: "CHARGE", charge_type: "ROOM", transaction_description: "ROOM CHARGE 101-A", amount: "450.00" },
+        { transaction_type: "TAX", charge_type: "ROOM", transaction_description: "ROOM TAX 101-A", amount: "54.00" },
+        { transaction_type: "PAYMENT", charge_type: "CARD", transaction_description: "VISA PAYMENT 101-A", amount: "-504.00" }
       ]
     });
-    seedParsedAttachment(context.database, {
-      propertyName: "Holiday Inn Express Pendleton",
-      propertySlug: "holiday-inn-express-pendleton",
-      reportType: "history_forecast_rows",
-      reportTitle: "History and Forecast",
-      reportDate: "2026-05-23",
-      attachmentName: "history-forecast.pdf",
-      rows: [
-        {
-          business_date: "2026-05-23",
-          section: "Forecast",
-          day_of_week: "Friday",
-          total_occ: "52",
-          arrivals: "14",
-          comp_rooms: "1",
-          house_use_rooms: "0",
-          deduct_indiv_rooms: "2",
-          non_deduct_indiv_rooms: "0",
-          deduct_group_rooms: "0",
-          non_deduct_group_rooms: "0",
-          occupancy_pct: "86.7%",
-          room_revenue: "$7,850.12",
-          average_rate: "$150.96",
-          departures: "8",
-          day_use_rooms: "0",
-          no_show_rooms: "1",
-          ooo_rooms: "3",
-          in_house_people: "89"
-        }
-      ]
-    });
-    seedParsedAttachment(context.database, {
-      propertyName: "Holiday Inn Express Pendleton",
-      propertySlug: "holiday-inn-express-pendleton",
-      reportType: "closed_folio_balance_rows",
-      reportTitle: "Closed Folio Balances",
-      reportDate: "2026-05-21",
-      attachmentName: "closed-folio-balances.pdf",
-      rows: [
-        {
-          section: "Closed Folio Balances",
-          row_kind: "summary",
-          summary_label: "City Ledger",
-          guest_name: null,
-          company_name: null,
-          metric_name: null,
-          net_change: "250.00",
-          metric_value: null
-        }
-      ]
-    });
+
     const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
-
-    const listResponse = await fetch(`${context.baseUrl}/api/netsuite/properties`, {
-      headers: { cookie: adminCookie }
-    });
-    assert.equal(listResponse.status, 200);
-    const listPayload = await listResponse.json() as { properties: Array<Record<string, unknown>> };
-    assert.equal(listPayload.properties.length, 1);
-    assert.equal(listPayload.properties[0]?.property_slug, "holiday-inn-express-pendleton");
-    assert.deepEqual(
-      (listPayload.properties[0]?.supportedReportTypes as Array<Record<string, unknown>>).map((entry) => entry.reportType),
-      ["all_transaction_rows", "closed_folio_balance_rows", "history_forecast_rows"]
-    );
-
-    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?attachmentId=${attachmentRecordId}`, {
-      headers: { cookie: adminCookie }
-    });
-    assert.equal(workspaceResponse.status, 200);
-    const workspacePayload = await workspaceResponse.json() as Record<string, unknown>;
-    assert.equal((workspacePayload.selectedAttachment as Record<string, unknown>).attachmentId, attachmentRecordId);
-    assert.equal(Array.isArray(workspacePayload.mappings), true);
-    assert.equal((workspacePayload.mappings as Array<Record<string, unknown>>).length, 2);
-    assert.equal((workspacePayload.discoverySummary as Record<string, unknown>).supportedReportTypeCount, 3);
-    const discoveredMappings = workspacePayload.mappings as Array<Record<string, unknown>>;
-    const chargeMapping = discoveredMappings.find((entry) => entry.itemLabel === "Room Charge");
-    const taxMapping = discoveredMappings.find((entry) => entry.itemLabel === "Room Tax");
-    assert.ok(chargeMapping);
-    assert.ok(taxMapping);
-    assert.equal(chargeMapping?.currentAmount, "149.00");
-    assert.equal(taxMapping?.currentAmount, "15.00");
-
-    const filteredWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?reportType=closed_folio_balance_rows`, {
-      headers: { cookie: adminCookie }
-    });
-    assert.equal(filteredWorkspaceResponse.status, 200);
-    const filteredWorkspacePayload = await filteredWorkspaceResponse.json() as Record<string, unknown>;
-    assert.equal(filteredWorkspacePayload.selectedReportType, "closed_folio_balance_rows");
-    assert.equal((filteredWorkspacePayload.selectedAttachment as Record<string, unknown>).reportType, "closed_folio_balance_rows");
-    assert.equal((filteredWorkspacePayload.availableReportTypes as Array<Record<string, unknown>>).length, 3);
-
-    const statisticalWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton?reportType=history_forecast_rows`, {
-      headers: { cookie: adminCookie }
-    });
-    assert.equal(statisticalWorkspaceResponse.status, 200);
-    const statisticalWorkspacePayload = await statisticalWorkspaceResponse.json() as Record<string, unknown>;
-    assert.equal(statisticalWorkspacePayload.selectedReportType, "history_forecast_rows");
-    assert.ok((statisticalWorkspacePayload.mappings as Array<Record<string, unknown>>).some((entry) => entry.amountField === "total_occ"));
-    assert.ok((statisticalWorkspacePayload.mappings as Array<Record<string, unknown>>).some((entry) => entry.amountField === "room_revenue"));
-
-    const saveResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton`, {
-      method: "PUT",
-      headers: {
-        cookie: adminCookie,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        attachmentId: attachmentRecordId,
-        mappings: [
-          {
-            mappingKey: String(chargeMapping?.mappingKey || ""),
-            netsuiteGlCode: "4000",
-            postingPolarity: "credit_positive"
-          },
-          {
-            mappingKey: String(taxMapping?.mappingKey || ""),
-            netsuiteGlCode: "2100",
-            postingPolarity: "credit_positive"
-          }
-        ],
-        defaults: {
-          externalIdPrefix: "hiep",
-          balancingGlCode: "9999",
-          memoTemplate: "Synchro HRM {propertyName} {reportDate}",
-          subsidiaryId: "7"
-        }
-      })
-    });
-    assert.equal(saveResponse.status, 200);
-    const savedWorkspace = await saveResponse.json() as Record<string, unknown>;
-    assert.equal((savedWorkspace.defaults as Record<string, unknown>).balancingGlCode, "9999");
-    assert.equal((savedWorkspace.defaults as Record<string, unknown>).subsidiaryId, "7");
-
-    const previewResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton/preview`, {
-      method: "POST",
-      headers: {
-        cookie: adminCookie,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        attachmentId: attachmentRecordId,
-        mappings: [
-          {
-            mappingKey: String(chargeMapping?.mappingKey || ""),
-            netsuiteGlCode: "4000",
-            postingPolarity: "credit_positive"
-          },
-          {
-            mappingKey: String(taxMapping?.mappingKey || ""),
-            netsuiteGlCode: "2100",
-            postingPolarity: "credit_positive"
-          }
-        ],
-        defaults: {
-          externalIdPrefix: "hiep",
-          balancingGlCode: "9999",
-          memoTemplate: "Synchro HRM {propertyName} {reportDate}",
-          subsidiaryId: "7"
-        }
-      })
-    });
-    assert.equal(previewResponse.status, 200);
-    const previewPayload = await previewResponse.json() as {
-      run: Record<string, unknown>;
-      workspace: Record<string, unknown>;
-    };
-    assert.equal(previewPayload.run.status, "preview");
-    const previewRunPayload = previewPayload.run.previewPayload as Record<string, unknown>;
-    const previewSummary = previewRunPayload.summary as Record<string, unknown>;
-    assert.equal(previewSummary.postable, true);
-    assert.equal(previewSummary.lineCount, 2);
-    assert.ok(((previewRunPayload.validations as Array<Record<string, unknown>>) ?? []).some((entry) => entry.code === "unbalanced_preview"));
-
     const saveSettingsResponse = await fetch(`${context.baseUrl}/api/settings/netsuite`, {
       method: "PUT",
       headers: {
@@ -735,15 +612,302 @@ test("NetSuite posting workspace discovers broad report metrics, builds previews
     });
     assert.equal(saveSettingsResponse.status, 200);
 
-    const submitResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-pendleton/runs/${encodeURIComponent(String(previewPayload.run.id))}/submit`, {
+    const listResponse = await fetch(`${context.baseUrl}/api/netsuite/properties`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = await listResponse.json() as { properties: Array<Record<string, unknown>> };
+    assert.equal(listPayload.properties.length, 2);
+    const propertySummaries = new Map<string, string[]>(
+      listPayload.properties.map((entry) => [
+        String(entry.property_slug || ""),
+        (entry.supportedReportTypes as Array<Record<string, unknown>>)
+          .map((reportEntry) => String(reportEntry.reportType || ""))
+          .sort()
+      ])
+    );
+    assert.deepEqual(propertySummaries.get("bw-plus-dayton-hotel-and-suites"), [
+      "best_western_daily_report_rows",
+      "credit_card_transaction_rows",
+      "daily_transaction_log_rows",
+      "operator_transaction_rows",
+      "room_tax_listing_rows"
+    ]);
+    assert.deepEqual(propertySummaries.get("holiday-inn-express-lexington"), [
+      "all_transaction_rows"
+    ]);
+
+    const supportedTypes: string[] = propertySummaries.get("bw-plus-dayton-hotel-and-suites") ?? [];
+
+    for (const reportType of supportedTypes) {
+      const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites?reportType=${encodeURIComponent(reportType)}`, {
+        headers: { cookie: adminCookie }
+      });
+      assert.equal(workspaceResponse.status, 200);
+      const workspacePayload = await workspaceResponse.json() as Record<string, unknown>;
+      const selectedAttachment = workspacePayload.selectedAttachment as Record<string, unknown>;
+      const attachmentId = Number(selectedAttachment.attachmentId);
+      assert.ok(attachmentId > 0);
+      assert.equal(workspacePayload.selectedReportType, reportType);
+      assert.ok(((workspacePayload.mappings as Array<Record<string, unknown>>) ?? []).length > 0);
+
+      const syncResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites/statistical-accounts/sync`, {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          attachmentId,
+          mappings: [],
+          defaults: {
+            externalIdPrefix: "bwdayton",
+            memoTemplate: "Synchro HRM {propertyName} {reportTitle} {reportDate}",
+            subsidiaryId: "7",
+            locationId: "9",
+            departmentId: "11",
+            classId: "13",
+            unitsTypeId: "5",
+            unitId: "Rooms"
+          }
+        })
+      });
+      assert.equal(syncResponse.status, 200);
+      const syncPayload = await syncResponse.json() as { sync: Record<string, unknown>; workspace: Record<string, unknown> };
+      assert.equal(syncPayload.sync.errorCount, 0);
+      assert.ok(((syncPayload.workspace.mappings as Array<Record<string, unknown>>) ?? []).every((entry) => String(entry.accountSyncStatus || "") === "synced"));
+
+      const previewResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites/preview`, {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          attachmentId,
+          mappings: [],
+          defaults: {
+            externalIdPrefix: "bwdayton",
+            memoTemplate: "Synchro HRM {propertyName} {reportTitle} {reportDate}",
+            subsidiaryId: "7",
+            locationId: "9",
+            departmentId: "11",
+            classId: "13",
+            unitsTypeId: "5",
+            unitId: "Rooms"
+          }
+        })
+      });
+      assert.equal(previewResponse.status, 200);
+      const previewPayload = await previewResponse.json() as { run: Record<string, unknown> };
+      assert.equal(previewPayload.run.status, "preview");
+      const previewRunPayload = previewPayload.run.previewPayload as Record<string, unknown>;
+      const previewSummary = previewRunPayload.summary as Record<string, unknown>;
+      assert.equal(previewSummary.postable, true);
+      assert.ok(Number(previewSummary.lineCount) > 0);
+
+      const submitResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites/runs/${encodeURIComponent(String(previewPayload.run.id))}/submit`, {
+        method: "POST",
+        headers: { cookie: adminCookie }
+      });
+      assert.equal(submitResponse.status, 200);
+      const submitPayload = await submitResponse.json() as { run: Record<string, unknown> };
+      assert.equal(submitPayload.run.status, "submitted");
+      assert.match(String(submitPayload.run.netsuite_response_summary || ""), /statistical journal/i);
+    }
+
+    const allTransactionsWorkspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-lexington?reportType=all_transaction_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(allTransactionsWorkspaceResponse.status, 200);
+    const allTransactionsWorkspacePayload = await allTransactionsWorkspaceResponse.json() as Record<string, unknown>;
+    const allTransactionsAttachment = allTransactionsWorkspacePayload.selectedAttachment as Record<string, unknown>;
+    const allTransactionsAttachmentId = Number(allTransactionsAttachment.attachmentId);
+    assert.ok(allTransactionsAttachmentId > 0);
+    assert.equal(allTransactionsWorkspacePayload.selectedReportType, "all_transaction_rows");
+    assert.ok(((allTransactionsWorkspacePayload.mappings as Array<Record<string, unknown>>) ?? []).length > 0);
+
+    const allTransactionsSyncResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-lexington/statistical-accounts/sync`, {
+      method: "POST",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        attachmentId: allTransactionsAttachmentId,
+        mappings: [],
+        defaults: {
+          externalIdPrefix: "hilex",
+          memoTemplate: "Synchro HRM {propertyName} {reportTitle} {reportDate}",
+          subsidiaryId: "7",
+          locationId: "9",
+          departmentId: "11",
+          classId: "13",
+          unitsTypeId: "5",
+          unitId: "Rooms"
+        }
+      })
+    });
+    assert.equal(allTransactionsSyncResponse.status, 200);
+
+    const allTransactionsPreviewResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-lexington/preview`, {
+      method: "POST",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        attachmentId: allTransactionsAttachmentId,
+        mappings: [],
+        defaults: {
+          externalIdPrefix: "hilex",
+          memoTemplate: "Synchro HRM {propertyName} {reportTitle} {reportDate}",
+          subsidiaryId: "7",
+          locationId: "9",
+          departmentId: "11",
+          classId: "13",
+          unitsTypeId: "5",
+          unitId: "Rooms"
+        }
+      })
+    });
+    assert.equal(allTransactionsPreviewResponse.status, 200);
+    const allTransactionsPreviewPayload = await allTransactionsPreviewResponse.json() as { run: Record<string, unknown> };
+    assert.equal(allTransactionsPreviewPayload.run.status, "preview");
+
+    const allTransactionsSubmitResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-lexington/runs/${encodeURIComponent(String(allTransactionsPreviewPayload.run.id))}/submit`, {
       method: "POST",
       headers: { cookie: adminCookie }
     });
-    assert.equal(submitResponse.status, 200);
-    const submitPayload = await submitResponse.json() as { run: Record<string, unknown> };
-    assert.equal(submitPayload.run.status, "submitted");
-    assert.match(String(submitPayload.run.netsuite_response_summary || ""), /JE1001/);
-    assert.equal((submitPayload.run.netsuiteResponsePayload as Record<string, unknown>).id, "9981");
+    assert.equal(allTransactionsSubmitResponse.status, 200);
+    const allTransactionsSubmitPayload = await allTransactionsSubmitResponse.json() as { run: Record<string, unknown> };
+    assert.equal(allTransactionsSubmitPayload.run.status, "submitted");
+    assert.match(String(allTransactionsSubmitPayload.run.netsuite_response_summary || ""), /statistical journal/i);
+
+    assert.ok(createdAccounts.length > 0);
+    assert.equal(journalCounter, supportedTypes.length + 1);
+  } finally {
+    await context.dispose();
+  }
+});
+
+test("NetSuite statistical account sync reuses existing BW Dayton accounts on rerun", async () => {
+  const createdAccounts: Array<{ id: string; acctNumber: string; acctName: string; externalId: string }> = [];
+  let tokenCounter = 0;
+  let accountCounter = 0;
+  const context = await createRouteTestContext({
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/services/rest/auth/oauth2/v1/token")) {
+        tokenCounter += 1;
+        return mockResponse(200, { access_token: `token-${tokenCounter}` });
+      }
+      if (url.includes("/services/rest/query/v1/suiteql")) {
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as { q?: string } : {};
+        const query = String(body.q || "");
+        const items = createdAccounts.filter((entry) => query.includes(entry.acctNumber) || query.includes(entry.externalId)).map((entry) => ({
+          id: entry.id,
+          acctnumber: entry.acctNumber,
+          acctname: entry.acctName,
+          externalid: entry.externalId
+        }));
+        return mockResponse(200, { items });
+      }
+      if (url.endsWith("/services/rest/record/v1/account")) {
+        accountCounter += 1;
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+        const account = {
+          id: `710${accountCounter}`,
+          acctNumber: String(body.acctNumber || ""),
+          acctName: String(body.acctName || ""),
+          externalId: String(body.externalId || "")
+        };
+        createdAccounts.push(account);
+        return mockResponse(201, account, {
+          location: `https://1234567.suitetalk.api.netsuite.com/services/rest/record/v1/account/${account.id}`
+        });
+      }
+      return mockResponse(404, { error: "Unexpected request" });
+    }
+  });
+
+  try {
+    seedParsedAttachment(context.database, {
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "best_western_daily_report_rows",
+      reportTitle: "Daily Report",
+      reportDate: "2026-05-31",
+      attachmentName: "DailyReport.pdf",
+      rows: [
+        { section: "Statistical Recap", row_kind: "metric", metric_name: "Occupied", today_value: "23", mtd_value: "949", ytd_value: "3789" },
+        { section: "Statistical Recap", row_kind: "metric", metric_name: "No Show", today_value: "1", mtd_value: "2", ytd_value: "25" }
+      ]
+    });
+    const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
+    const saveSettingsResponse = await fetch(`${context.baseUrl}/api/settings/netsuite`, {
+      method: "PUT",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(buildSettingsPayload())
+    });
+    assert.equal(saveSettingsResponse.status, 200);
+
+    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites?reportType=best_western_daily_report_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    const workspacePayload = await workspaceResponse.json() as Record<string, unknown>;
+    const attachmentId = Number((workspacePayload.selectedAttachment as Record<string, unknown>).attachmentId);
+
+    const firstSync = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites/statistical-accounts/sync`, {
+      method: "POST",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        attachmentId,
+        mappings: [],
+        defaults: {
+          externalIdPrefix: "bwdayton",
+          memoTemplate: "Synchro HRM {propertyName} {reportTitle} {reportDate}",
+          subsidiaryId: "7",
+          unitsTypeId: "5",
+          unitId: "Rooms"
+        }
+      })
+    });
+    const firstSyncPayload = await firstSync.json() as { sync: Record<string, unknown>; workspace: Record<string, unknown> };
+    assert.equal(firstSync.status, 200);
+    assert.ok(Number(firstSyncPayload.sync.createdCount) > 0);
+    const firstNumbers = ((firstSyncPayload.workspace.mappings as Array<Record<string, unknown>>) ?? []).map((entry) => entry.statisticalAccountNumber);
+
+    const secondSync = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites/statistical-accounts/sync`, {
+      method: "POST",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        attachmentId,
+        mappings: [],
+        defaults: {
+          externalIdPrefix: "bwdayton",
+          memoTemplate: "Synchro HRM {propertyName} {reportTitle} {reportDate}",
+          subsidiaryId: "7",
+          unitsTypeId: "5",
+          unitId: "Rooms"
+        }
+      })
+    });
+    const secondSyncPayload = await secondSync.json() as { sync: Record<string, unknown>; workspace: Record<string, unknown> };
+    assert.equal(secondSync.status, 200);
+    assert.equal(secondSyncPayload.sync.createdCount, 0);
+    assert.ok(Number(secondSyncPayload.sync.reusedCount) > 0);
+    const secondNumbers = ((secondSyncPayload.workspace.mappings as Array<Record<string, unknown>>) ?? []).map((entry) => entry.statisticalAccountNumber);
+    assert.deepEqual(secondNumbers, firstNumbers);
   } finally {
     await context.dispose();
   }
@@ -755,46 +919,46 @@ test("NetSuite posting workspace collapses same-message PDF and workbook sibling
   });
 
   try {
-    const graphMessageId = "message-holiday-dedupe";
+    const graphMessageId = "message-bw-dayton-dedupe";
     seedParsedAttachment(context.database, {
       graphMessageId,
-      propertyName: "Holiday Inn Express Ellensburg",
-      propertySlug: "holiday-inn-express-ellensburg",
-      reportType: "adjustment_refund_activity_rows",
-      reportTitle: "Adjustments and Refunds Activity",
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "credit_card_transaction_rows",
+      reportTitle: "Credit Card Transactions",
       reportDate: "2026-06-24",
-      attachmentName: "Jun 25, 2026-ELNWA-Holiday Inn ExpressEllensburg-adjustment-activity.pdf",
+      attachmentName: "Jun 25, 2026-BWDAY-CreditCardBatchReport.pdf",
       rows: [
         {
-          section: "Adjustments",
-          row_kind: "total",
-          summary_label: "Adjustments",
-          adjusted_amount: "12.34"
+          card_type: "VS",
+          charge_amount: "12.34",
+          credit_amount: "0.00",
+          transaction_status: "Settled"
         }
       ]
     });
     const workbookAttachmentId = seedParsedAttachment(context.database, {
       graphMessageId,
-      propertyName: "Holiday Inn Express Ellensburg",
-      propertySlug: "holiday-inn-express-ellensburg",
-      reportType: "adjustment_refund_activity_rows",
-      reportTitle: "Adjustments and Refunds Activity",
+      propertyName: "BW Plus Dayton Hotel & Suites",
+      propertySlug: "bw-plus-dayton-hotel-and-suites",
+      reportType: "credit_card_transaction_rows",
+      reportTitle: "Credit Card Transactions",
       reportDate: "2026-06-24",
-      attachmentName: "Jun 25, 2026-ELNWA-Holiday Inn ExpressEllensburg-adjustment-activity.xlsx",
+      attachmentName: "Jun 25, 2026-BWDAY-CreditCardBatchReport.xlsx",
       extension: ".xlsx",
       contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       rows: [
         {
-          section: "Adjustments",
-          row_kind: "total",
-          summary_label: "Adjustments",
-          adjusted_amount: "12.34"
+          card_type: "VS",
+          charge_amount: "12.34",
+          credit_amount: "0.00",
+          transaction_status: "Settled"
         }
       ]
     });
 
     const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
-    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/holiday-inn-express-ellensburg`, {
+    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/bw-plus-dayton-hotel-and-suites`, {
       headers: { cookie: adminCookie }
     });
     assert.equal(workspaceResponse.status, 200);
@@ -803,7 +967,7 @@ test("NetSuite posting workspace collapses same-message PDF and workbook sibling
     const supportedAttachments = workspacePayload.supportedAttachments as Array<Record<string, unknown>>;
     assert.equal(supportedAttachments.length, 1);
     assert.equal(supportedAttachments[0]?.attachmentId, workbookAttachmentId);
-    assert.equal(supportedAttachments[0]?.attachmentName, "Jun 25, 2026-ELNWA-Holiday Inn ExpressEllensburg-adjustment-activity.xlsx");
+    assert.equal(supportedAttachments[0]?.attachmentName, "Jun 25, 2026-BWDAY-CreditCardBatchReport.xlsx");
     assert.equal((workspacePayload.selectedAttachment as Record<string, unknown>).attachmentId, workbookAttachmentId);
     assert.equal((workspacePayload.discoverySummary as Record<string, unknown>).attachmentCount, 1);
     assert.equal(
@@ -1263,6 +1427,113 @@ test("NetSuite posting workspace collapses room tax listings by charge type", as
     const taxMapping = mappings.find((entry) => entry.amountField === "tax_amount");
     assert.ok(taxMapping);
     assert.equal(taxMapping?.currentAmount, "53.71");
+  } finally {
+    await context.dispose();
+  }
+});
+
+test("NetSuite posting workspace collapses daily audit packet sections into statistical categories", async () => {
+  const context = await createRouteTestContext({
+    fetchImpl: async () => mockResponse(404, { error: "Unexpected request" })
+  });
+
+  try {
+    seedParsedAttachment(context.database, {
+      propertyName: "Comfort Inn & Suites WA184",
+      propertySlug: "comfort-inn-and-suites-wa184",
+      reportType: "choice_audit_packet_rows",
+      reportTitle: "Daily Audit Packet",
+      reportDate: "2026-05-31",
+      attachmentName: "All_Night_Audit_Reports_WA184_COMFORT WALLA WALLA DAILY PDF FOR NETSUITE_2026-05-31.pdf",
+      rows: [
+        {
+          report_name: "Hotel Journal Summary",
+          row_kind: "detail",
+          line_text: "Cash (CA) (2.00) 0.00 0.00 (2.00) (2.00) 0.00 0.00 1 1 0 0"
+        },
+        {
+          report_name: "Hotel Journal Summary",
+          row_kind: "detail",
+          line_text: "Visa Payment (VI) (3,253.41) 0.00 0.00 (3,253.41) (2,871.80) 0.00 (381.61) 10 10 0 0"
+        },
+        {
+          report_name: "Hotel Journal Summary",
+          row_kind: "total",
+          line_text: "Today's Total: (2,580.93) 0.00 0.00 (2,580.93) (1,291.18) 53.00 (1,342.75) 129 129 0 0"
+        },
+        {
+          report_name: "Hotel Statistics",
+          row_kind: "section",
+          line_text: "Room Statistics 5/31/2026 Current PTD Last Year PTD Current YTD Last YTD"
+        },
+        {
+          report_name: "Hotel Statistics",
+          row_kind: "detail",
+          line_text: "Total Rooms 76 2,356 2,356 11,476 11,476"
+        },
+        {
+          report_name: "Hotel Statistics",
+          row_kind: "detail",
+          line_text: "Total Occupied Rooms 22 952 1,092 3,699 4,281"
+        },
+        {
+          report_name: "Revenue by Rate Code",
+          row_kind: "detail",
+          line_text: "SP3BK 1 4.35 117.85 5.84 117.85 22 2.70 3,238.50 3.04 147.20 47 1.32 5,877.94 1.55 125.06"
+        },
+        {
+          report_name: "Final Transaction Closeout",
+          row_kind: "section",
+          section: "Transaction Type: CREDIT CARDS",
+          line_text: "Transaction Type: CREDIT CARDS"
+        },
+        {
+          report_name: "Final Transaction Closeout",
+          row_kind: "total",
+          section: "Transaction Type: CREDIT CARDS",
+          line_text: "Total For Credit Cards 0.00 0.00 0.00 (5073.32) (3730.57) 0.00"
+        }
+      ]
+    });
+
+    const adminCookie = await login(context.baseUrl, "admin", ADMIN_PASSWORD);
+    const workspaceResponse = await fetch(`${context.baseUrl}/api/netsuite/properties/comfort-inn-and-suites-wa184?reportType=choice_audit_packet_rows`, {
+      headers: { cookie: adminCookie }
+    });
+    assert.equal(workspaceResponse.status, 200);
+    const workspacePayload = await workspaceResponse.json() as Record<string, unknown>;
+    assert.equal(workspacePayload.selectedReportType, "choice_audit_packet_rows");
+
+    const mappings = workspacePayload.mappings as Array<Record<string, unknown>>;
+    assert.ok(mappings.length >= 6);
+
+    const cashSummary = mappings.find((entry) => entry.groupLabel === "Hotel Journal Summary" && entry.itemLabel === "Cash");
+    assert.ok(cashSummary);
+    assert.equal(cashSummary?.amountField, "journal_total");
+    assert.equal(cashSummary?.currentAmount, "-2.00");
+
+    const visaSummary = mappings.find((entry) => entry.groupLabel === "Hotel Journal Summary" && entry.itemLabel === "Visa Payment");
+    assert.ok(visaSummary);
+    assert.equal(visaSummary?.currentAmount, "-3253.41");
+
+    const totalRooms = mappings.find((entry) => entry.groupLabel === "Hotel Statistics / Room Statistics" && entry.itemLabel === "Total Rooms");
+    assert.ok(totalRooms);
+    assert.equal(totalRooms?.amountField, "current");
+    assert.equal(totalRooms?.currentAmount, "76.00");
+
+    const occupiedRooms = mappings.find((entry) => entry.groupLabel === "Hotel Statistics / Room Statistics" && entry.itemLabel === "Total Occupied Rooms");
+    assert.ok(occupiedRooms);
+    assert.equal(occupiedRooms?.currentAmount, "22.00");
+
+    const rateCode = mappings.find((entry) => entry.groupLabel === "Revenue by Rate Code" && entry.itemLabel === "SP3BK");
+    assert.ok(rateCode);
+    assert.equal(rateCode?.amountField, "daily_revenue");
+    assert.equal(rateCode?.currentAmount, "117.85");
+
+    const closeout = mappings.find((entry) => entry.groupLabel === "Final Transaction Closeout / Transaction Type: CREDIT CARDS");
+    assert.ok(closeout);
+    assert.equal(closeout?.amountField, "todays_net");
+    assert.equal(closeout?.currentAmount, "-5073.32");
   } finally {
     await context.dispose();
   }

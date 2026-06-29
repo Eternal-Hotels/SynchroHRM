@@ -475,12 +475,19 @@ Current capabilities:
 - encrypt and store the private key in SQLite state
 - run a proof-of-life SuiteQL query
 - export NetSuite metadata catalog rows and full schema JSON snapshots
+- stage property-scoped statistical categories for NetSuite statistical account sync across parsed report families
+- create property-scoped NetSuite statistical accounts with deterministic account numbers
+- submit NetSuite `statisticaljournalentry` records from saved statistical previews
 
 Current non-capabilities:
 
-- no operational NetSuite sync job
-- no NetSuite writeback/posting flow
+- no direct financial GL import or standard `journalEntry` posting flow
 - no scheduled NetSuite reconciliation loop
+
+Accounting direction note:
+
+- The current NetSuite plan is statistical-only for now. Financial GL import is deferred for a later phase.
+- The NetSuite page should continue listing all parsed properties so parser refinement can keep happening across the portfolio while the statistical workflow evolves.
 
 Secret handling:
 

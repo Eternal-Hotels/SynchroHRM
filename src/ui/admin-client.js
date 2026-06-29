@@ -31,10 +31,11 @@ const state = {
   netsuiteTone: "empty",
   netsuitePostingProperties: [],
   netsuitePostingWorkspace: null,
-  netsuitePostingStatus: "No NetSuite posting actions yet.",
+  netsuitePostingStatus: "No NetSuite statistical actions yet.",
   netsuitePostingTone: "empty",
   netsuitePostingLoading: false,
   netsuitePostingSaving: false,
+  netsuitePostingSyncing: false,
   netsuitePostingPreviewing: false,
   netsuitePostingSubmitting: false,
   netsuitePostingSelectedRunId: "",
@@ -108,15 +109,17 @@ const netsuitePostingForm = document.getElementById("netsuite-posting-form");
 const netsuiteReportTypeSelect = document.getElementById("netsuite-report-type-select");
 const netsuiteAttachmentSelect = document.getElementById("netsuite-attachment-select");
 const netsuitePostingExternalPrefix = document.getElementById("netsuite-posting-external-prefix");
-const netsuitePostingBalancingGl = document.getElementById("netsuite-posting-balancing-gl");
 const netsuitePostingMemoTemplate = document.getElementById("netsuite-posting-memo-template");
 const netsuitePostingSubsidiaryId = document.getElementById("netsuite-posting-subsidiary-id");
 const netsuitePostingCurrencyId = document.getElementById("netsuite-posting-currency-id");
 const netsuitePostingLocationId = document.getElementById("netsuite-posting-location-id");
 const netsuitePostingDepartmentId = document.getElementById("netsuite-posting-department-id");
 const netsuitePostingClassId = document.getElementById("netsuite-posting-class-id");
+const netsuitePostingUnitsTypeId = document.getElementById("netsuite-posting-units-type-id");
+const netsuitePostingUnitId = document.getElementById("netsuite-posting-unit-id");
 const netsuitePostingRefreshButton = document.getElementById("netsuite-posting-refresh-button");
 const netsuitePostingSaveButton = document.getElementById("netsuite-posting-save-button");
+const netsuitePostingSyncButton = document.getElementById("netsuite-posting-sync-button");
 const netsuitePostingPreviewButton = document.getElementById("netsuite-posting-preview-button");
 const netsuitePostingSubmitButton = document.getElementById("netsuite-posting-submit-button");
 const netsuitePostingStatus = document.getElementById("netsuite-posting-status");
@@ -174,15 +177,17 @@ const netsuitePostingAvailable = Boolean(
   netsuiteReportTypeSelect &&
   netsuiteAttachmentSelect &&
   netsuitePostingExternalPrefix &&
-  netsuitePostingBalancingGl &&
   netsuitePostingMemoTemplate &&
   netsuitePostingSubsidiaryId &&
   netsuitePostingCurrencyId &&
   netsuitePostingLocationId &&
   netsuitePostingDepartmentId &&
   netsuitePostingClassId &&
+  netsuitePostingUnitsTypeId &&
+  netsuitePostingUnitId &&
   netsuitePostingRefreshButton &&
   netsuitePostingSaveButton &&
+  netsuitePostingSyncButton &&
   netsuitePostingPreviewButton &&
   netsuitePostingSubmitButton &&
   netsuitePostingStatus &&
@@ -412,6 +417,12 @@ if (netsuitePostingRefreshButton) {
         reportType || null
       );
     }
+  });
+}
+
+if (netsuitePostingSyncButton) {
+  netsuitePostingSyncButton.addEventListener("click", () => {
+    void syncNetSuiteStatisticalAccounts();
   });
 }
 
@@ -951,8 +962,8 @@ function renderNetSuitePosting() {
     ? "Loading NetSuite posting workspace..."
     : (
       properties.length > 0
-        ? `${properties.length} properties currently have parsed report families available for statistical GL work.`
-        : "No parsed report families are available yet."
+        ? `${properties.length} properties currently have parsed report attachments available for statistical GL work.`
+        : "No parsed report attachments are available yet."
     );
   netsuitePropertyStatus.className = `form-status ${properties.length > 0 ? "success" : "empty"}`;
 
@@ -975,8 +986,8 @@ function renderNetSuitePosting() {
               <strong>${escapeHtml(property.property_name || "Unassigned Property")}</strong>
               <div class="attachment-meta">
                 <span><code>${escapeHtml(property.property_slug || "unassigned-property")}</code></span>
-                <span>Supported attachments: ${escapeHtml(String(property.attachment_count || 0))}</span>
-                <span>Source types: ${escapeHtml(String(supportedReportTypes.length))}</span>
+                <span>Parsed attachments: ${escapeHtml(String(property.attachment_count || 0))}</span>
+                <span>Report types: ${escapeHtml(String(supportedReportTypes.length))}</span>
                 <span>Latest received: ${escapeHtml(formatDateTime(property.last_received_at))}</span>
                 ${reportTypeSummary ? `<span>${escapeHtml(reportTypeSummary)}</span>` : ""}
               </div>
@@ -1324,9 +1335,6 @@ function renderNetSuitePostingDefaults(defaults) {
   if (document.activeElement !== netsuitePostingExternalPrefix && !state.netsuitePostingSaving) {
     netsuitePostingExternalPrefix.value = defaults.externalIdPrefix || "";
   }
-  if (document.activeElement !== netsuitePostingBalancingGl && !state.netsuitePostingSaving) {
-    netsuitePostingBalancingGl.value = defaults.balancingGlCode || "";
-  }
   if (document.activeElement !== netsuitePostingMemoTemplate && !state.netsuitePostingSaving) {
     netsuitePostingMemoTemplate.value = defaults.memoTemplate || "";
   }
@@ -1345,6 +1353,12 @@ function renderNetSuitePostingDefaults(defaults) {
   if (document.activeElement !== netsuitePostingClassId && !state.netsuitePostingSaving) {
     netsuitePostingClassId.value = defaults.classId || "";
   }
+  if (document.activeElement !== netsuitePostingUnitsTypeId && !state.netsuitePostingSaving) {
+    netsuitePostingUnitsTypeId.value = defaults.unitsTypeId || "";
+  }
+  if (document.activeElement !== netsuitePostingUnitId && !state.netsuitePostingSaving) {
+    netsuitePostingUnitId.value = defaults.unitId || "";
+  }
 }
 
 function renderNetSuitePostingMappings(mappings) {
@@ -1359,13 +1373,13 @@ function renderNetSuitePostingMappings(mappings) {
     return;
   }
 
-  const missingCount = mappings.filter((entry) => !(entry.netsuiteGlCode || "").trim()).length;
+  const pendingCount = mappings.filter((entry) => !(entry.netsuiteAccountId || "").trim()).length;
   netsuitePostingMappingSummary.className = "notes-block";
   netsuitePostingMappingSummary.innerHTML = `
     <strong>${escapeHtml(String(mappings.length))} discovered statistical categories</strong>
     <div class="attachment-meta">
-      <span>Missing GL codes: ${escapeHtml(String(missingCount))}</span>
-      <span>Mappings are grouped into source categories for the selected report type.</span>
+      <span>Unsynced accounts: ${escapeHtml(String(pendingCount))}</span>
+      <span>Account numbers are auto-generated deterministically per property and mapping key.</span>
     </div>
   `;
 
@@ -1373,37 +1387,24 @@ function renderNetSuitePostingMappings(mappings) {
     <div class="report-table-wrap">
       <table class="data-table netsuite-posting-table">
         <thead>
-          <tr>
-            <th>Group</th>
-            <th>Category</th>
-            <th>Value Field</th>
-            <th>Current Value</th>
-            <th>GL Code</th>
-            <th>Polarity</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${mappings.map((mapping) => `
+            <tr>
+              <th>Group</th>
+              <th>Category</th>
+              <th>Value Field</th>
+              <th>Current Value</th>
+              <th>Account Number</th>
+              <th>Sync Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${mappings.map((mapping) => `
             <tr data-netsuite-mapping-key="${escapeHtml(mapping.mappingKey || "")}">
               <td>${escapeHtml(mapping.groupLabel || "")}</td>
               <td>${escapeHtml(mapping.itemLabel || "")}</td>
               <td>${escapeHtml(mapping.amountFieldLabel || mapping.amountField || "")}</td>
               <td>${escapeHtml(mapping.currentAmount || "0.00")}</td>
-              <td>
-                <input
-                  type="text"
-                  class="table-input"
-                  value="${escapeHtml(mapping.netsuiteGlCode || "")}"
-                  data-netsuite-gl-code="1"
-                  placeholder="Account number"
-                >
-              </td>
-              <td>
-                <select class="table-input" data-netsuite-posting-polarity="1">
-                  <option value="debit_positive" ${mapping.postingPolarity === "debit_positive" ? "selected" : ""}>Debit positive</option>
-                  <option value="credit_positive" ${mapping.postingPolarity === "credit_positive" ? "selected" : ""}>Credit positive</option>
-                </select>
-              </td>
+              <td>${escapeHtml(mapping.statisticalAccountNumber || "Will be generated on sync")}</td>
+              <td>${escapeHtml(mapping.accountSyncStatus || "pending")}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -1441,9 +1442,9 @@ function renderNetSuitePostingPreview(runs) {
       <div class="attachment-meta">
         <span>External ID: <code>${escapeHtml(preview.externalId || "")}</code></span>
         <span>Memo: ${escapeHtml(preview.memo || "")}</span>
-        <span>Positive side: ${escapeHtml(preview.summary ? preview.summary.debitTotal : "0.00")}</span>
-        <span>Negative side: ${escapeHtml(preview.summary ? preview.summary.creditTotal : "0.00")}</span>
-        <span>Difference: ${escapeHtml(preview.summary ? preview.summary.balanceDifference : "0.00")}</span>
+        <span>Lines: ${escapeHtml(String(preview.summary ? preview.summary.lineCount : 0))}</span>
+        <span>Non-zero rows: ${escapeHtml(String(preview.summary ? preview.summary.nonZeroLineCount : 0))}</span>
+        <span>Missing synced accounts: ${escapeHtml(String(preview.summary ? preview.summary.missingAccountCount : 0))}</span>
       </div>
       ${validations.length > 0 ? `
         <div class="notes-block">
@@ -1461,10 +1462,9 @@ function renderNetSuitePostingPreview(runs) {
             <tr>
               <th>Group</th>
               <th>Category</th>
-              <th>GL Code</th>
+              <th>Account Number</th>
               <th>Value</th>
-              <th>Positive</th>
-              <th>Negative</th>
+              <th>Sync Status</th>
             </tr>
           </thead>
           <tbody>
@@ -1472,10 +1472,9 @@ function renderNetSuitePostingPreview(runs) {
               <tr>
                 <td>${escapeHtml(line.groupLabel || "")}</td>
                 <td>${escapeHtml(line.itemLabel || "")}</td>
-                <td>${escapeHtml(line.glCode || "")}</td>
+                <td>${escapeHtml(line.statisticalAccountNumber || "")}</td>
                 <td>${escapeHtml(line.rawAmount || "0.00")}</td>
-                <td>${escapeHtml(line.debit || "0.00")}</td>
-                <td>${escapeHtml(line.credit || "0.00")}</td>
+                <td>${escapeHtml(line.accountSyncStatus || "pending")}</td>
               </tr>
             `).join("")}
           </tbody>
@@ -1491,7 +1490,7 @@ function renderNetSuitePostingRuns(runs) {
   }
 
   if (!Array.isArray(runs) || runs.length === 0) {
-    netsuitePostingRuns.innerHTML = '<div class="empty">No saved NetSuite posting previews have been recorded yet.</div>';
+    netsuitePostingRuns.innerHTML = '<div class="empty">No saved NetSuite statistical previews have been recorded yet.</div>';
     return;
   }
 
@@ -1501,7 +1500,7 @@ function renderNetSuitePostingRuns(runs) {
       <div class="settings-card-head">
         <div>
           <h3>Saved Preview And Submit History</h3>
-          <p class="subhead">Each preview is persisted so we can reload it before deciding whether to post it.</p>
+          <p class="subhead">Each preview is persisted so we can reload it before deciding whether to submit a statistical journal.</p>
         </div>
       </div>
       <div class="list-grid">
@@ -1538,21 +1537,23 @@ function syncNetSuitePostingControls() {
     return;
   }
 
-  const busy = state.netsuitePostingLoading || state.netsuitePostingSaving || state.netsuitePostingPreviewing || state.netsuitePostingSubmitting || !isAdmin();
+  const busy = state.netsuitePostingLoading || state.netsuitePostingSaving || state.netsuitePostingSyncing || state.netsuitePostingPreviewing || state.netsuitePostingSubmitting || !isAdmin();
   const hasWorkspace = Boolean(state.netsuitePostingWorkspace && state.netsuitePostingWorkspace.selectedAttachment);
   const hasReportTypes = Boolean(state.netsuitePostingWorkspace && getNetSuiteWorkspaceReportTypes(state.netsuitePostingWorkspace).length > 0);
   netsuiteReportTypeSelect.disabled = busy || !hasReportTypes;
   netsuiteAttachmentSelect.disabled = busy || !hasWorkspace;
   netsuitePostingExternalPrefix.disabled = busy || !hasWorkspace;
-  netsuitePostingBalancingGl.disabled = true;
   netsuitePostingMemoTemplate.disabled = busy || !hasWorkspace;
   netsuitePostingSubsidiaryId.disabled = busy || !hasWorkspace;
   netsuitePostingCurrencyId.disabled = busy || !hasWorkspace;
   netsuitePostingLocationId.disabled = busy || !hasWorkspace;
   netsuitePostingDepartmentId.disabled = busy || !hasWorkspace;
   netsuitePostingClassId.disabled = busy || !hasWorkspace;
+  netsuitePostingUnitsTypeId.disabled = busy || !hasWorkspace;
+  netsuitePostingUnitId.disabled = busy || !hasWorkspace;
   netsuitePostingRefreshButton.disabled = busy || !hasWorkspace;
   netsuitePostingSaveButton.disabled = busy || !hasWorkspace;
+  netsuitePostingSyncButton.disabled = busy || !hasWorkspace;
   netsuitePostingPreviewButton.disabled = busy || !hasWorkspace;
   netsuitePostingSubmitButton.disabled = busy || !hasWorkspace || !getSelectedNetSuiteRun(state.netsuitePostingWorkspace ? state.netsuitePostingWorkspace.runs : []);
 }
@@ -1574,7 +1575,7 @@ async function loadNetSuiteWorkspace(propertySlug, attachmentId = null, reportTy
   }
 
   state.netsuitePostingLoading = true;
-  setNetSuitePostingStatus("Loading NetSuite posting workspace...", "empty");
+  setNetSuitePostingStatus("Loading NetSuite statistical workspace...", "empty");
   syncNetSuitePostingControls();
 
   try {
@@ -1582,7 +1583,7 @@ async function loadNetSuiteWorkspace(propertySlug, attachmentId = null, reportTy
     state.netsuitePostingSelectedRunId = Array.isArray(state.netsuitePostingWorkspace.runs) && state.netsuitePostingWorkspace.runs.length > 0
       ? state.netsuitePostingWorkspace.runs[0].id || ""
       : "";
-    setNetSuitePostingStatus("NetSuite posting workspace loaded.", "success");
+    setNetSuitePostingStatus("NetSuite statistical workspace loaded.", "success");
     renderNetSuitePosting();
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
@@ -1602,7 +1603,7 @@ async function saveNetSuitePostingSetup() {
   const propertySlug = state.netsuitePostingWorkspace.property.property_slug;
   const attachmentId = Number(netsuiteAttachmentSelect.value);
   state.netsuitePostingSaving = true;
-  setNetSuitePostingStatus("Saving NetSuite posting setup...", "empty");
+  setNetSuitePostingStatus("Saving NetSuite statistical setup...", "empty");
   syncNetSuitePostingControls();
 
   try {
@@ -1620,13 +1621,48 @@ async function saveNetSuitePostingSetup() {
     state.netsuitePostingSelectedRunId = Array.isArray(state.netsuitePostingWorkspace.runs) && state.netsuitePostingWorkspace.runs.length > 0
       ? state.netsuitePostingSelectedRunId || state.netsuitePostingWorkspace.runs[0].id || ""
       : "";
-    setNetSuitePostingStatus("NetSuite posting setup saved.", "success");
+    setNetSuitePostingStatus("NetSuite statistical setup saved.", "success");
     renderNetSuitePosting();
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
     setNetSuitePostingStatus(message, "error");
   } finally {
     state.netsuitePostingSaving = false;
+    syncNetSuitePostingControls();
+  }
+}
+
+async function syncNetSuiteStatisticalAccounts() {
+  if (!isAdmin() || !state.netsuitePostingWorkspace || !state.netsuitePostingWorkspace.property) {
+    return;
+  }
+
+  const propertySlug = state.netsuitePostingWorkspace.property.property_slug;
+  const attachmentId = Number(netsuiteAttachmentSelect.value);
+  state.netsuitePostingSyncing = true;
+  setNetSuitePostingStatus("Synchronizing statistical accounts to NetSuite...", "empty");
+  syncNetSuitePostingControls();
+
+  try {
+    const result = await fetchJson(`/api/netsuite/properties/${encodeURIComponent(propertySlug)}/statistical-accounts/sync`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        attachmentId,
+        mappings: collectNetSuitePostingMappings(),
+        defaults: collectNetSuitePostingDefaults()
+      })
+    });
+    state.netsuitePostingWorkspace = result.workspace || state.netsuitePostingWorkspace;
+    setNetSuitePostingStatus((result.sync && result.sync.message) || "Statistical account sync completed.", result.sync && result.sync.errorCount ? "error" : "success");
+    renderNetSuitePosting();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setNetSuitePostingStatus(message, "error");
+  } finally {
+    state.netsuitePostingSyncing = false;
     syncNetSuitePostingControls();
   }
 }
@@ -1639,7 +1675,7 @@ async function buildNetSuitePostingPreview() {
   const propertySlug = state.netsuitePostingWorkspace.property.property_slug;
   const attachmentId = Number(netsuiteAttachmentSelect.value);
   state.netsuitePostingPreviewing = true;
-  setNetSuitePostingStatus("Building the NetSuite posting preview...", "empty");
+  setNetSuitePostingStatus("Building the NetSuite statistical preview...", "empty");
   syncNetSuitePostingControls();
 
   try {
@@ -1665,7 +1701,7 @@ async function buildNetSuitePostingPreview() {
     setNetSuitePostingStatus(
       result.run && result.run.previewPayload && result.run.previewPayload.summary && result.run.previewPayload.summary.postable
         ? "NetSuite statistical preview built. Review the lines and warnings before submitting."
-        : "NetSuite preview built. Review the validations before submitting.",
+        : "NetSuite statistical preview built. Review the validations before submitting.",
       result.run && result.run.previewPayload && result.run.previewPayload.summary && result.run.previewPayload.summary.postable ? "success" : "empty"
     );
     renderNetSuitePosting();
@@ -1686,12 +1722,12 @@ async function submitNetSuitePostingPreview() {
   const propertySlug = state.netsuitePostingWorkspace.property.property_slug;
   const selectedRun = getSelectedNetSuiteRun(state.netsuitePostingWorkspace.runs || []);
   if (!selectedRun || !selectedRun.id) {
-    setNetSuitePostingStatus("Load or build a saved preview before submitting to NetSuite.", "error");
+    setNetSuitePostingStatus("Load or build a saved statistical preview before submitting to NetSuite.", "error");
     return;
   }
 
   state.netsuitePostingSubmitting = true;
-  setNetSuitePostingStatus("Submitting the saved preview to NetSuite...", "empty");
+  setNetSuitePostingStatus("Submitting the saved statistical journal to NetSuite...", "empty");
   syncNetSuitePostingControls();
 
   try {
@@ -1702,7 +1738,7 @@ async function submitNetSuitePostingPreview() {
       state.netsuitePostingWorkspace.runs = state.netsuitePostingWorkspace.runs.map((run) => run.id === result.run.id ? result.run : run);
     }
     state.netsuitePostingSelectedRunId = result.run.id || state.netsuitePostingSelectedRunId;
-    setNetSuitePostingStatus(result.run.netsuite_response_summary || "NetSuite journal submitted.", "success");
+    setNetSuitePostingStatus(result.run.netsuite_response_summary || "NetSuite statistical journal submitted.", "success");
     renderNetSuitePosting();
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
@@ -1743,13 +1779,8 @@ function collectNetSuitePostingMappings() {
   }
 
   return Array.from(netsuitePostingMappings.querySelectorAll("tr[data-netsuite-mapping-key]")).map((row) => {
-    const mappingKey = row.getAttribute("data-netsuite-mapping-key") || "";
-    const glInput = row.querySelector("input[data-netsuite-gl-code]");
-    const polarityInput = row.querySelector("select[data-netsuite-posting-polarity]");
     return {
-      mappingKey,
-      netsuiteGlCode: glInput instanceof HTMLInputElement ? glInput.value.trim() : "",
-      postingPolarity: polarityInput instanceof HTMLSelectElement ? polarityInput.value : "debit_positive"
+      mappingKey: row.getAttribute("data-netsuite-mapping-key") || ""
     };
   });
 }
@@ -1757,13 +1788,14 @@ function collectNetSuitePostingMappings() {
 function collectNetSuitePostingDefaults() {
   return {
     externalIdPrefix: netsuitePostingExternalPrefix ? netsuitePostingExternalPrefix.value.trim() : "",
-    balancingGlCode: netsuitePostingBalancingGl ? netsuitePostingBalancingGl.value.trim() : "",
     memoTemplate: netsuitePostingMemoTemplate ? netsuitePostingMemoTemplate.value.trim() : "",
     subsidiaryId: netsuitePostingSubsidiaryId ? netsuitePostingSubsidiaryId.value.trim() : "",
     currencyId: netsuitePostingCurrencyId ? netsuitePostingCurrencyId.value.trim() : "",
     locationId: netsuitePostingLocationId ? netsuitePostingLocationId.value.trim() : "",
     departmentId: netsuitePostingDepartmentId ? netsuitePostingDepartmentId.value.trim() : "",
-    classId: netsuitePostingClassId ? netsuitePostingClassId.value.trim() : ""
+    classId: netsuitePostingClassId ? netsuitePostingClassId.value.trim() : "",
+    unitsTypeId: netsuitePostingUnitsTypeId ? netsuitePostingUnitsTypeId.value.trim() : "",
+    unitId: netsuitePostingUnitId ? netsuitePostingUnitId.value.trim() : ""
   };
 }
 

@@ -350,9 +350,32 @@ export function createApp(
           request.params.propertySlug,
           attachmentId,
           mappings.map((entry: Record<string, unknown>) => ({
-            mappingKey: typeof entry?.mappingKey === "string" ? entry.mappingKey : "",
-            netsuiteGlCode: typeof entry?.netsuiteGlCode === "string" ? entry.netsuiteGlCode : "",
-            postingPolarity: typeof entry?.postingPolarity === "string" ? entry.postingPolarity : ""
+            mappingKey: typeof entry?.mappingKey === "string" ? entry.mappingKey : ""
+          })),
+          defaults
+        )
+      );
+    } catch (error) {
+      sendNetSuitePostingError(response, error);
+    }
+  });
+
+  app.post("/api/netsuite/properties/:propertySlug/statistical-accounts/sync", async (request, response) => {
+    if (!requireAuthenticatedUser(response)) {
+      return;
+    }
+
+    const attachmentId = Number(request.body?.attachmentId);
+    const mappings = Array.isArray(request.body?.mappings) ? request.body.mappings : [];
+    const defaults = isRecord(request.body?.defaults) ? request.body.defaults : {};
+
+    try {
+      response.json(
+        await netSuitePostingService.syncStatisticalAccounts(
+          request.params.propertySlug,
+          attachmentId,
+          mappings.map((entry: Record<string, unknown>) => ({
+            mappingKey: typeof entry?.mappingKey === "string" ? entry.mappingKey : ""
           })),
           defaults
         )
@@ -378,9 +401,7 @@ export function createApp(
           attachmentId,
           getResponseUser(response).username,
           mappings.map((entry: Record<string, unknown>) => ({
-            mappingKey: typeof entry?.mappingKey === "string" ? entry.mappingKey : "",
-            netsuiteGlCode: typeof entry?.netsuiteGlCode === "string" ? entry.netsuiteGlCode : "",
-            postingPolarity: typeof entry?.postingPolarity === "string" ? entry.postingPolarity : ""
+            mappingKey: typeof entry?.mappingKey === "string" ? entry.mappingKey : ""
           })),
           defaults
         )

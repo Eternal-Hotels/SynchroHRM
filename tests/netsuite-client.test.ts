@@ -262,6 +262,100 @@ test("NetSuite client creates a journal entry and surfaces the returned id and t
   assert.match(result.journalEntry.location, /journalEntry\/9981$/);
 });
 
+test("NetSuite client resolves statistical accounts by account number and external ID", async () => {
+  let requestCount = 0;
+  const client = new NetSuiteClient(async () => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      return mockResponse(200, { access_token: "token-123" });
+    }
+
+    return mockResponse(200, {
+      items: [
+        { id: "501", acctnumber: "BWDAY-STAT-001", acctname: "BW Dayton Occupied", externalid: "synchrohrm:statacct:bw:occupied" },
+        { id: "502", acctnumber: "BWDAY-STAT-002", acctname: "BW Dayton No Show", externalid: "synchrohrm:statacct:bw:noshow" }
+      ]
+    });
+  });
+
+  const result = await client.resolveStatisticalAccounts(
+    mockSettings(),
+    privateKeyPem,
+    ["BWDAY-STAT-001"],
+    ["synchrohrm:statacct:bw:noshow"]
+  );
+
+  assert.equal(result.byAccountNumber["BWDAY-STAT-001"]?.id, "501");
+  assert.equal(result.byExternalId["synchrohrm:statacct:bw:noshow"]?.acctNumber, "BWDAY-STAT-002");
+});
+
+test("NetSuite client creates a statistical account and surfaces the returned identifiers", async () => {
+  let requestCount = 0;
+  const client = new NetSuiteClient(async (input) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      return mockResponse(200, { access_token: "token-123" });
+    }
+
+    assert.match(String(input), /\/services\/rest\/record\/v1\/account$/);
+    return mockResponse(201, {
+      id: "7001",
+      acctNumber: "BWDAY-BESTWESTER-1A2B3C4D",
+      acctName: "BW Dayton Daily Occupied",
+      externalId: "synchrohrm:statacct:bw-plus-dayton-hotel-and-suites:best-western:occupied"
+    }, {
+      location: "https://1234567.suitetalk.api.netsuite.com/services/rest/record/v1/account/7001"
+    });
+  });
+
+  const result = await client.createStatisticalAccount(mockSettings(), privateKeyPem, {
+    acctType: { id: "Stat" },
+    acctNumber: "BWDAY-BESTWESTER-1A2B3C4D",
+    acctName: "BW Dayton Daily Occupied",
+    externalId: "synchrohrm:statacct:bw-plus-dayton-hotel-and-suites:best-western:occupied"
+  });
+
+  assert.equal(result.account.id, "7001");
+  assert.equal(result.account.acctNumber, "BWDAY-BESTWESTER-1A2B3C4D");
+  assert.match(result.account.location, /account\/7001$/);
+});
+
+test("NetSuite client creates a statistical journal entry and surfaces the returned id and tranId", async () => {
+  let requestCount = 0;
+  const client = new NetSuiteClient(async (input) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      return mockResponse(200, { access_token: "token-123" });
+    }
+
+    assert.match(String(input), /\/services\/rest\/record\/v1\/statisticaljournalentry$/);
+    return mockResponse(201, {
+      id: "9988",
+      tranId: "SJ1008"
+    }, {
+      location: "https://1234567.suitetalk.api.netsuite.com/services/rest/record/v1/statisticaljournalentry/9988"
+    });
+  });
+
+  const result = await client.createStatisticalJournalEntry(mockSettings(), privateKeyPem, {
+    externalId: "bw-dayton-best-western-daily-20260531",
+    tranDate: "2026-05-31",
+    memo: "BW Dayton statistical journal",
+    line: {
+      items: [
+        {
+          account: { id: "7001" },
+          debit: 23
+        }
+      ]
+    }
+  });
+
+  assert.equal(result.journalEntry.id, "9988");
+  assert.equal(result.journalEntry.tranId, "SJ1008");
+  assert.match(result.journalEntry.location, /statisticaljournalentry\/9988$/);
+});
+
 function mockSettings(): NetSuiteConnectionSettings {
   return {
     serviceBaseUrl: "https://1234567.suitetalk.api.netsuite.com",

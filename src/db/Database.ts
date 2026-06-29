@@ -54,6 +54,13 @@ interface NetSuiteMonetaryMappingRecord {
   defaultPostingPolarity: string;
   postingPolarity: string;
   netsuiteGlCode: string;
+  statisticalAccountNumber: string;
+  statisticalAccountName: string;
+  statisticalAccountExternalId: string;
+  netsuiteAccountId: string;
+  accountSyncStatus: string;
+  lastSyncedAt: string;
+  lastSyncError: string;
   firstSeenAt: string;
   lastSeenAt: string;
   lastAttachmentId: number | null;
@@ -72,6 +79,8 @@ interface NetSuitePostingDefaultsRecord {
   locationId: string;
   departmentId: string;
   classId: string;
+  unitsTypeId: string;
+  unitId: string;
   updatedAt: string;
 }
 
@@ -237,6 +246,13 @@ export class AppDatabase {
         default_posting_polarity TEXT NOT NULL DEFAULT '',
         posting_polarity TEXT NOT NULL DEFAULT '',
         netsuite_gl_code TEXT NOT NULL DEFAULT '',
+        statistical_account_number TEXT NOT NULL DEFAULT '',
+        statistical_account_name TEXT NOT NULL DEFAULT '',
+        statistical_account_external_id TEXT NOT NULL DEFAULT '',
+        netsuite_account_id TEXT NOT NULL DEFAULT '',
+        account_sync_status TEXT NOT NULL DEFAULT '',
+        last_synced_at TEXT NOT NULL DEFAULT '',
+        last_sync_error TEXT NOT NULL DEFAULT '',
         first_seen_at TEXT NOT NULL,
         last_seen_at TEXT NOT NULL,
         last_attachment_id INTEGER,
@@ -257,6 +273,8 @@ export class AppDatabase {
         location_id TEXT NOT NULL DEFAULT '',
         department_id TEXT NOT NULL DEFAULT '',
         class_id TEXT NOT NULL DEFAULT '',
+        units_type_id TEXT NOT NULL DEFAULT '',
+        unit_id TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL,
         PRIMARY KEY (property_slug, report_type)
       );
@@ -291,6 +309,16 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_netsuite_posting_runs_property
       ON netsuite_posting_runs (property_slug, report_type, created_at DESC);
     `);
+
+    this.ensureColumn("netsuite_monetary_mappings", "statistical_account_number", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("netsuite_monetary_mappings", "statistical_account_name", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("netsuite_monetary_mappings", "statistical_account_external_id", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("netsuite_monetary_mappings", "netsuite_account_id", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("netsuite_monetary_mappings", "account_sync_status", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("netsuite_monetary_mappings", "last_synced_at", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("netsuite_monetary_mappings", "last_sync_error", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("netsuite_posting_defaults", "units_type_id", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("netsuite_posting_defaults", "unit_id", "TEXT NOT NULL DEFAULT ''");
 
     for (const [reportType, columns] of Object.entries(REPORT_COLUMN_MAP)) {
       const reportColumns = columns
@@ -710,6 +738,13 @@ export class AppDatabase {
         default_posting_polarity,
         posting_polarity,
         netsuite_gl_code,
+        statistical_account_number,
+        statistical_account_name,
+        statistical_account_external_id,
+        netsuite_account_id,
+        account_sync_status,
+        last_synced_at,
+        last_sync_error,
         first_seen_at,
         last_seen_at,
         last_attachment_id,
@@ -738,12 +773,19 @@ export class AppDatabase {
         default_posting_polarity,
         posting_polarity,
         netsuite_gl_code,
+        statistical_account_number,
+        statistical_account_name,
+        statistical_account_external_id,
+        netsuite_account_id,
+        account_sync_status,
+        last_synced_at,
+        last_sync_error,
         first_seen_at,
         last_seen_at,
         last_attachment_id,
         last_attachment_name,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(property_slug, report_type, mapping_key) DO UPDATE SET
         group_label = excluded.group_label,
         item_label = excluded.item_label,
@@ -752,6 +794,13 @@ export class AppDatabase {
         default_posting_polarity = excluded.default_posting_polarity,
         posting_polarity = excluded.posting_polarity,
         netsuite_gl_code = excluded.netsuite_gl_code,
+        statistical_account_number = excluded.statistical_account_number,
+        statistical_account_name = excluded.statistical_account_name,
+        statistical_account_external_id = excluded.statistical_account_external_id,
+        netsuite_account_id = excluded.netsuite_account_id,
+        account_sync_status = excluded.account_sync_status,
+        last_synced_at = excluded.last_synced_at,
+        last_sync_error = excluded.last_sync_error,
         first_seen_at = MIN(netsuite_monetary_mappings.first_seen_at, excluded.first_seen_at),
         last_seen_at = excluded.last_seen_at,
         last_attachment_id = excluded.last_attachment_id,
@@ -773,6 +822,13 @@ export class AppDatabase {
           record.defaultPostingPolarity,
           record.postingPolarity,
           record.netsuiteGlCode,
+          record.statisticalAccountNumber,
+          record.statisticalAccountName,
+          record.statisticalAccountExternalId,
+          record.netsuiteAccountId,
+          record.accountSyncStatus,
+          record.lastSyncedAt,
+          record.lastSyncError,
           record.firstSeenAt,
           record.lastSeenAt,
           record.lastAttachmentId,
@@ -800,6 +856,8 @@ export class AppDatabase {
         location_id,
         department_id,
         class_id,
+        units_type_id,
+        unit_id,
         updated_at
       FROM netsuite_posting_defaults
       WHERE property_slug = ? AND report_type = ?
@@ -821,8 +879,10 @@ export class AppDatabase {
         location_id,
         department_id,
         class_id,
+        units_type_id,
+        unit_id,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(property_slug, report_type) DO UPDATE SET
         balancing_gl_code = excluded.balancing_gl_code,
         external_id_prefix = excluded.external_id_prefix,
@@ -832,6 +892,8 @@ export class AppDatabase {
         location_id = excluded.location_id,
         department_id = excluded.department_id,
         class_id = excluded.class_id,
+        units_type_id = excluded.units_type_id,
+        unit_id = excluded.unit_id,
         updated_at = excluded.updated_at
     `).run(
       record.propertySlug,
@@ -844,6 +906,8 @@ export class AppDatabase {
       record.locationId,
       record.departmentId,
       record.classId,
+      record.unitsTypeId,
+      record.unitId,
       record.updatedAt
     );
   }

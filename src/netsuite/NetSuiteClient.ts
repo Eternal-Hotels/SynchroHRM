@@ -1,7 +1,11 @@
 import { constants, createPrivateKey, randomUUID, sign as signBuffer } from "node:crypto";
 import type {
+  NetSuiteAccountLookupRecord,
   NetSuiteConnectionSettings,
   NetSuiteJournalEntryResult,
+  NetSuiteStatisticalAccountLookupResult,
+  NetSuiteStatisticalAccountResult,
+  NetSuiteStatisticalJournalEntryResult,
   NetSuiteJwtAlgorithm
 } from "./types.js";
 
@@ -212,6 +216,107 @@ export class NetSuiteClient {
     return byAccountNumber;
   }
 
+  async resolveStatisticalAccounts(
+    settings: NetSuiteConnectionSettings,
+    privateKeyPem: string,
+    accountNumbers: string[],
+    externalIds: string[]
+  ): Promise<NetSuiteStatisticalAccountLookupResult> {
+    const normalizedAccountNumbers = Array.from(new Set(
+      accountNumbers
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    ));
+    const normalizedExternalIds = Array.from(new Set(
+      externalIds
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    ));
+
+    if (normalizedAccountNumbers.length === 0 && normalizedExternalIds.length === 0) {
+      return {
+        byAccountNumber: {},
+        byExternalId: {},
+        raw: null
+      };
+    }
+
+    const lookupFilters: string[] = [];
+    if (normalizedAccountNumbers.length > 0) {
+      lookupFilters.push(`acctnumber IN (${normalizedAccountNumbers.map((value) => `'${escapeSuiteQlLiteral(value)}'`).join(", ")})`);
+    }
+    if (normalizedExternalIds.length > 0) {
+      lookupFilters.push(`externalid IN (${normalizedExternalIds.map((value) => `'${escapeSuiteQlLiteral(value)}'`).join(", ")})`);
+    }
+
+    const accessToken = await this.requestAccessToken(settings, privateKeyPem);
+    const query = `SELECT id, acctnumber, acctname, externalid FROM Account WHERE accttype = 'Stat' AND (${lookupFilters.join(" OR ")})`;
+    const payload = await this.runSuiteQl(
+      accessToken,
+      settings,
+      query,
+      Math.max(normalizedAccountNumbers.length + normalizedExternalIds.length, 1) + 4
+    ) as { items?: Array<Record<string, unknown>> };
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    const byAccountNumber: Record<string, NetSuiteAccountLookupRecord> = {};
+    const byExternalId: Record<string, NetSuiteAccountLookupRecord> = {};
+
+    for (const item of items) {
+      const record = normalizeAccountLookupRecord(item);
+      if (!record) {
+        continue;
+      }
+      if (record.acctNumber) {
+        byAccountNumber[record.acctNumber] = record;
+      }
+      if (record.externalId) {
+        byExternalId[record.externalId] = record;
+      }
+    }
+
+    return {
+      byAccountNumber,
+      byExternalId,
+      raw: isRecord(payload) ? payload : null
+    };
+  }
+
+  async createStatisticalAccount(
+    settings: NetSuiteConnectionSettings,
+    privateKeyPem: string,
+    accountRecord: Record<string, unknown>
+  ): Promise<NetSuiteStatisticalAccountResult> {
+    const accessToken = await this.requestAccessToken(settings, privateKeyPem);
+    const response = await this.fetchImpl(`${settings.serviceBaseUrl}/services/rest/record/v1/account`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+        prefer: "return=representation"
+      },
+      body: JSON.stringify(accountRecord)
+    });
+
+    if (!response.ok) {
+      throw await createMetadataCatalogError(response, "NetSuite statistical account create failed", "statistical_account_create_failed");
+    }
+
+    const payload = await safeParseJson(response);
+    const locationHeader = response.headers.get("location") || response.headers.get("Location") || "";
+    return {
+      httpStatus: response.status,
+      account: {
+        id: readString(payload?.id) ?? extractRecordIdFromLocation(locationHeader) ?? "",
+        acctNumber: readString(payload?.acctNumber) ?? readString(payload?.acctnumber) ?? "",
+        acctName: readString(payload?.acctName) ?? readString(payload?.acctname) ?? readString(payload?.name) ?? "",
+        externalId: readString(payload?.externalId) ?? readString(payload?.externalid) ?? "",
+        location: locationHeader
+      },
+      raw: payload
+    };
+  }
+
   async createJournalEntry(
     settings: NetSuiteConnectionSettings,
     privateKeyPem: string,
@@ -246,11 +351,46 @@ export class NetSuiteClient {
 
     return {
       httpStatus: response.status,
-      journalEntry: {
-        id: internalId,
-        tranId,
-        location: locationHeader
+      journalEntry: createRecordResponse(internalId, tranId, locationHeader),
+      raw: payload
+    };
+  }
+
+  async createStatisticalJournalEntry(
+    settings: NetSuiteConnectionSettings,
+    privateKeyPem: string,
+    journalRecord: Record<string, unknown>
+  ): Promise<NetSuiteStatisticalJournalEntryResult> {
+    const accessToken = await this.requestAccessToken(settings, privateKeyPem);
+    const recordUrl = `${settings.serviceBaseUrl}/services/rest/record/v1/statisticaljournalentry`;
+    const response = await this.fetchImpl(recordUrl, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+        prefer: "return=representation"
       },
+      body: JSON.stringify(journalRecord)
+    });
+
+    if (!response.ok) {
+      throw await createMetadataCatalogError(response, "NetSuite statistical journal entry create failed", "statistical_journal_entry_create_failed");
+    }
+
+    const payload = await safeParseJson(response);
+    const locationHeader = response.headers.get("location") || response.headers.get("Location") || "";
+    const internalId = readString(payload?.id)
+      ?? extractRecordIdFromLocation(locationHeader)
+      ?? "";
+    const tranId = readString(payload?.tranId)
+      ?? readString(payload?.transactionNumber)
+      ?? readString(payload?.name)
+      ?? "";
+
+    return {
+      httpStatus: response.status,
+      journalEntry: createRecordResponse(internalId, tranId, locationHeader),
       raw: payload
     };
   }
@@ -551,6 +691,28 @@ function extractRecordIdFromLocation(value: string | null): string | null {
     const segments = normalized.replace(/\/+$/g, "").split("/").filter(Boolean);
     return segments.length > 0 ? segments[segments.length - 1] ?? null : null;
   }
+}
+
+function createRecordResponse(id: string, tranId: string, location: string) {
+  return {
+    id,
+    tranId,
+    location
+  };
+}
+
+function normalizeAccountLookupRecord(item: Record<string, unknown>): NetSuiteAccountLookupRecord | null {
+  const id = readString(item.id);
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    acctNumber: readString(item.acctnumber) ?? "",
+    acctName: readString(item.acctname) ?? "",
+    externalId: readString(item.externalid) ?? ""
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

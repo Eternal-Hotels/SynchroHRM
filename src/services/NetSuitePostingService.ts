@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AppDatabase } from "../db/Database.js";
 import { COMMON_EXPORT_COLUMNS, REPORT_COLUMN_MAP, REPORT_TITLES } from "../reports.js";
 import { REPORT_TYPES, type ReportType } from "../types.js";
+import { generateDeterministicStatisticalAccountNumber } from "../netsuite/statisticalAccountNumber.js";
 import { NetSuiteConnectionService, NetSuiteSettingsError } from "./NetSuiteConnectionService.js";
 
 const SUPPORTED_NETSUITE_REPORT_TYPES = REPORT_TYPES;
@@ -52,7 +53,7 @@ const ITEM_CONTEXT_FIELDS = [
 ] as const;
 const CONTEXT_FIELD_LIMIT = 4;
 
-type SupportedMonetaryReportType = ReportType;
+type SupportedMonetaryReportType = (typeof SUPPORTED_NETSUITE_REPORT_TYPES)[number];
 type PostingPolarity = "debit_positive" | "credit_positive";
 
 interface SupportedAttachmentSummary {
@@ -88,11 +89,13 @@ interface PostingPreviewLine {
   itemLabel: string;
   amountField: string;
   amountFieldLabel: string;
-  glCode: string;
-  postingPolarity: PostingPolarity;
+  amountValue: number;
   rawAmount: string;
-  debit: string;
-  credit: string;
+  statisticalAccountNumber: string;
+  statisticalAccountName: string;
+  statisticalAccountExternalId: string;
+  netsuiteAccountId: string;
+  accountSyncStatus: string;
 }
 
 interface PostingPreviewValidation {
@@ -117,9 +120,8 @@ interface PostingPreviewPayload {
   defaults: PostingDefaults;
   summary: {
     lineCount: number;
-    debitTotal: string;
-    creditTotal: string;
-    balanceDifference: string;
+    nonZeroLineCount: number;
+    missingAccountCount: number;
     postable: boolean;
   };
   validations: PostingPreviewValidation[];
@@ -135,13 +137,13 @@ interface PostingDefaults {
   locationId: string;
   departmentId: string;
   classId: string;
+  unitsTypeId: string;
+  unitId: string;
   updatedAt: string;
 }
 
 interface MonetaryMappingInput {
   mappingKey: string;
-  netsuiteGlCode: string;
-  postingPolarity: string;
 }
 
 interface PostingDefaultsInput {
@@ -153,6 +155,8 @@ interface PostingDefaultsInput {
   locationId?: string;
   departmentId?: string;
   classId?: string;
+  unitsTypeId?: string;
+  unitId?: string;
 }
 
 interface MonetaryWorkspacePayload {
@@ -169,6 +173,28 @@ interface MonetaryWorkspacePayload {
   mappings: Array<Record<string, unknown>>;
   defaults: PostingDefaults;
   runs: Array<Record<string, unknown>>;
+}
+
+interface StatisticalAccountAssignment {
+  mappingKey: string;
+  groupLabel: string;
+  itemLabel: string;
+  amountField: string;
+  amountFieldLabel: string;
+  currentAmount: string;
+  currentAmountValue: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastAttachmentId: number | null;
+  lastAttachmentName: string;
+  updatedAt: string;
+  accountNumber: string;
+  accountName: string;
+  externalId: string;
+  netsuiteAccountId: string;
+  accountSyncStatus: string;
+  lastSyncedAt: string;
+  lastSyncError: string;
 }
 
 export class NetSuitePostingError extends Error {
@@ -271,6 +297,32 @@ export class NetSuitePostingService {
     return this.getWorkspace(propertySlug, attachmentId);
   }
 
+  async syncStatisticalAccounts(
+    propertySlug: string,
+    attachmentId: number,
+    mappings: MonetaryMappingInput[],
+    defaults: PostingDefaultsInput
+  ): Promise<{ workspace: MonetaryWorkspacePayload; sync: Record<string, unknown> }> {
+    const attachment = this.requireAttachment(propertySlug, attachmentId);
+    const discovered = this.discoverItemsForAttachment(attachment);
+    this.persistSetup(propertySlug, attachment, discovered, mappings, defaults);
+
+    const workspace = this.getWorkspace(propertySlug, attachmentId);
+    const sync = await syncStatisticalAccountsForWorkspace(
+      this.database,
+      this.connectionService,
+      workspace.property,
+      attachment,
+      workspace.mappings,
+      workspace.defaults
+    );
+
+    return {
+      workspace: this.getWorkspace(propertySlug, attachmentId),
+      sync
+    };
+  }
+
   buildPreview(
     propertySlug: string,
     attachmentId: number,
@@ -330,16 +382,12 @@ export class NetSuitePostingService {
     if (preview.summary.postable !== true) {
       throw new NetSuitePostingError("Only a preview without blocking validation errors can be submitted to NetSuite.");
     }
-
-    const uniqueGlCodes = Array.from(new Set(
-      preview.lines
-        .map((line) => normalizeWhitespace(line.glCode))
-        .filter(Boolean)
-    ));
-    const accountIdByNumber = await this.connectionService.resolveGlAccountIds(uniqueGlCodes);
-    const missingCodes = uniqueGlCodes.filter((code) => !accountIdByNumber[code]);
-    if (missingCodes.length > 0) {
-      const message = `NetSuite could not resolve these account numbers: ${missingCodes.join(", ")}.`;
+    const missingAccounts = preview.lines
+      .filter((line) => !normalizeWhitespace(line.netsuiteAccountId))
+      .map((line) => normalizeWhitespace(line.itemLabel) || normalizeWhitespace(line.mappingKey))
+      .filter(Boolean);
+    if (missingAccounts.length > 0) {
+      const message = `Statistical accounts must be synchronized before submit. Missing account IDs for: ${missingAccounts.join(", ")}.`;
       this.database.updateNetSuitePostingRun(runId, {
         status: "failed",
         netsuiteResponseSummary: message,
@@ -348,14 +396,14 @@ export class NetSuitePostingService {
       throw new NetSuitePostingError(message);
     }
 
-    const journalRecord = buildJournalEntryRecord(preview, accountIdByNumber);
+    const journalRecord = buildStatisticalJournalEntryRecord(preview);
 
     try {
-      const result = await this.connectionService.createJournalEntry(journalRecord);
+      const result = await this.connectionService.createStatisticalJournalEntry(journalRecord);
       const responseSummary = result.journalEntry.tranId
-        ? `Submitted to NetSuite as ${result.journalEntry.tranId}.`
+        ? `Submitted to NetSuite as statistical journal ${result.journalEntry.tranId}.`
         : (result.journalEntry.id
-          ? `Submitted to NetSuite as journal ${result.journalEntry.id}.`
+          ? `Submitted to NetSuite as statistical journal ${result.journalEntry.id}.`
           : "Submitted to NetSuite.");
       this.database.updateNetSuitePostingRun(runId, {
         status: "submitted",
@@ -472,15 +520,6 @@ export class NetSuitePostingService {
     defaults: PostingDefaultsInput
   ): void {
     const now = new Date().toISOString();
-    const mappingUpdates = new Map(
-      mappings.map((entry) => [
-        normalizeWhitespace(entry.mappingKey),
-        {
-          netsuiteGlCode: normalizeWhitespace(entry.netsuiteGlCode),
-          postingPolarity: normalizePostingPolarity(entry.postingPolarity)
-        }
-      ])
-    );
     const existingByKey = new Map(
       this.database
         .getNetSuiteMonetaryMappings(propertySlug, attachment.reportType)
@@ -489,7 +528,6 @@ export class NetSuitePostingService {
 
     this.database.upsertNetSuiteMonetaryMappings(discovered.map((item) => {
       const existing = existingByKey.get(item.mappingKey) ?? null;
-      const update = mappingUpdates.get(item.mappingKey) ?? null;
       return {
         propertySlug,
         reportType: attachment.reportType,
@@ -499,10 +537,15 @@ export class NetSuitePostingService {
         amountField: item.amountField,
         amountFieldLabel: item.amountFieldLabel,
         defaultPostingPolarity: item.defaultPostingPolarity,
-        postingPolarity: update?.postingPolarity
-          ?? normalizePostingPolarity(existing?.posting_polarity)
-          ?? item.defaultPostingPolarity,
-        netsuiteGlCode: update?.netsuiteGlCode ?? normalizeWhitespace(existing?.netsuite_gl_code),
+        postingPolarity: normalizePostingPolarity(existing?.posting_polarity) ?? item.defaultPostingPolarity,
+        netsuiteGlCode: normalizeWhitespace(existing?.netsuite_gl_code),
+        statisticalAccountNumber: normalizeWhitespace(existing?.statistical_account_number),
+        statisticalAccountName: normalizeWhitespace(existing?.statistical_account_name),
+        statisticalAccountExternalId: normalizeWhitespace(existing?.statistical_account_external_id),
+        netsuiteAccountId: normalizeWhitespace(existing?.netsuite_account_id),
+        accountSyncStatus: normalizeWhitespace(existing?.account_sync_status),
+        lastSyncedAt: normalizeWhitespace(existing?.last_synced_at),
+        lastSyncError: normalizeWhitespace(existing?.last_sync_error),
         firstSeenAt: typeof existing?.first_seen_at === "string" && existing.first_seen_at
           ? existing.first_seen_at
           : now,
@@ -527,6 +570,8 @@ export class NetSuitePostingService {
       locationId: pickPostedDefault(defaults, "locationId", currentDefaults.locationId),
       departmentId: pickPostedDefault(defaults, "departmentId", currentDefaults.departmentId),
       classId: pickPostedDefault(defaults, "classId", currentDefaults.classId),
+      unitsTypeId: pickPostedDefault(defaults, "unitsTypeId", currentDefaults.unitsTypeId),
+      unitId: pickPostedDefault(defaults, "unitId", currentDefaults.unitId),
       updatedAt: now
     });
   }
@@ -542,7 +587,6 @@ function mergeMappings(
 
   return discovered.map((item) => {
     const saved = savedByKey.get(item.mappingKey) ?? null;
-    const postingPolarity = normalizePostingPolarity(saved?.posting_polarity) ?? item.defaultPostingPolarity;
     return {
       mappingKey: item.mappingKey,
       reportType: item.reportType,
@@ -552,10 +596,15 @@ function mergeMappings(
       amountField: item.amountField,
       amountFieldLabel: item.amountFieldLabel,
       defaultPostingPolarity: item.defaultPostingPolarity,
-      postingPolarity,
-      netsuiteGlCode: normalizeWhitespace(saved?.netsuite_gl_code),
       currentAmount: formatMoney(item.amount),
       currentAmountValue: item.amount,
+      statisticalAccountNumber: normalizeWhitespace(saved?.statistical_account_number),
+      statisticalAccountName: normalizeWhitespace(saved?.statistical_account_name),
+      statisticalAccountExternalId: normalizeWhitespace(saved?.statistical_account_external_id),
+      netsuiteAccountId: normalizeWhitespace(saved?.netsuite_account_id),
+      accountSyncStatus: normalizeWhitespace(saved?.account_sync_status),
+      lastSyncedAt: normalizeWhitespace(saved?.last_synced_at),
+      lastSyncError: normalizeWhitespace(saved?.last_sync_error),
       firstSeenAt: typeof saved?.first_seen_at === "string" ? saved.first_seen_at : "",
       lastSeenAt: typeof saved?.last_seen_at === "string" ? saved.last_seen_at : "",
       lastAttachmentId: typeof saved?.last_attachment_id === "number" ? saved.last_attachment_id : null,
@@ -575,6 +624,8 @@ function normalizePostingDefaults(value: Record<string, unknown> | null): Postin
     locationId: normalizeWhitespace(value?.location_id),
     departmentId: normalizeWhitespace(value?.department_id),
     classId: normalizeWhitespace(value?.class_id),
+    unitsTypeId: normalizeWhitespace(value?.units_type_id),
+    unitId: normalizeWhitespace(value?.unit_id),
     updatedAt: typeof value?.updated_at === "string" ? value.updated_at : ""
   };
 }
@@ -589,6 +640,8 @@ function emptyPostingDefaults(): PostingDefaults {
     locationId: "",
     departmentId: "",
     classId: "",
+    unitsTypeId: "",
+    unitId: "",
     updatedAt: ""
   };
 }
@@ -622,56 +675,48 @@ function buildPostingPreview(
 ): PostingPreviewPayload {
   const validations: PostingPreviewValidation[] = [];
   const lines: PostingPreviewLine[] = [];
-  let debitTotal = 0;
-  let creditTotal = 0;
+  let nonZeroLineCount = 0;
+  let missingAccountCount = 0;
 
   for (const mapping of mappings) {
     const amount = typeof mapping.currentAmountValue === "number" ? mapping.currentAmountValue : parseAmount(mapping.currentAmount) ?? 0;
     if (roundMoney(amount) === 0) {
       continue;
     }
+    nonZeroLineCount += 1;
 
-    const glCode = normalizeWhitespace(mapping.netsuiteGlCode);
-    const postingPolarity = normalizePostingPolarity(mapping.postingPolarity) ?? normalizePostingPolarity(mapping.defaultPostingPolarity) ?? "debit_positive";
-    if (!glCode) {
+    const netsuiteAccountId = normalizeWhitespace(mapping.netsuiteAccountId);
+    if (!netsuiteAccountId) {
       validations.push({
         level: "error",
-        code: "missing_gl_code",
-        message: `Missing NetSuite GL code for ${String(mapping.itemLabel || "this report line")}.`,
+        code: "missing_statistical_account",
+        message: `Statistical account sync is still missing for ${String(mapping.itemLabel || "this report line")}.`,
         mappingKey: String(mapping.mappingKey || "")
       });
-      continue;
+      missingAccountCount += 1;
     }
 
-    const line = buildPostingLine({
+    lines.push({
       mappingKey: String(mapping.mappingKey || ""),
       groupLabel: String(mapping.groupLabel || ""),
       itemLabel: String(mapping.itemLabel || ""),
       amountField: String(mapping.amountField || ""),
       amountFieldLabel: String(mapping.amountFieldLabel || ""),
-      glCode,
-      postingPolarity
-    }, amount);
-    lines.push(line);
-    debitTotal += parseAmount(line.debit) ?? 0;
-    creditTotal += parseAmount(line.credit) ?? 0;
+      amountValue: roundMoney(amount),
+      rawAmount: formatMoney(amount),
+      statisticalAccountNumber: normalizeWhitespace(mapping.statisticalAccountNumber),
+      statisticalAccountName: normalizeWhitespace(mapping.statisticalAccountName),
+      statisticalAccountExternalId: normalizeWhitespace(mapping.statisticalAccountExternalId),
+      netsuiteAccountId,
+      accountSyncStatus: normalizeWhitespace(mapping.accountSyncStatus) || (netsuiteAccountId ? "synced" : "pending")
+    });
   }
 
-  let balanceDifference = roundMoney(debitTotal - creditTotal);
   if (lines.length === 0) {
     validations.push({
       level: "warning",
       code: "no_posting_lines",
       message: "No non-zero statistical values were available for this attachment.",
-      mappingKey: ""
-    });
-  }
-
-  if (balanceDifference !== 0) {
-    validations.push({
-      level: "warning",
-      code: "unbalanced_preview",
-      message: `Preview does not balance and balancing is currently disabled. Difference: ${formatMoney(balanceDifference)}.`,
       mappingKey: ""
     });
   }
@@ -705,9 +750,8 @@ function buildPostingPreview(
     defaults,
     summary: {
       lineCount: lines.length,
-      debitTotal: formatMoney(debitTotal),
-      creditTotal: formatMoney(creditTotal),
-      balanceDifference: formatMoney(balanceDifference),
+      nonZeroLineCount,
+      missingAccountCount,
       postable: validations.every((validation) => validation.level !== "error")
     },
     validations,
@@ -715,31 +759,20 @@ function buildPostingPreview(
   };
 }
 
-function buildJournalEntryRecord(
-  preview: PostingPreviewPayload,
-  accountIdByNumber: Record<string, string>
-): Record<string, unknown> {
+function buildStatisticalJournalEntryRecord(preview: PostingPreviewPayload): Record<string, unknown> {
   const record: Record<string, unknown> = {
     externalId: preview.externalId,
     tranDate: preview.accountingDate,
     memo: preview.memo,
     line: {
       items: preview.lines.map((line) => {
-        const payload: Record<string, unknown> = {
+        return {
           account: {
-            id: accountIdByNumber[line.glCode]
+            id: line.netsuiteAccountId
           },
-          memo: [line.groupLabel, line.itemLabel].filter(Boolean).join(": ")
+          memo: [line.groupLabel, line.itemLabel].filter(Boolean).join(": "),
+          debit: roundMoney(line.amountValue)
         };
-        const debit = parseAmount(line.debit) ?? 0;
-        const credit = parseAmount(line.credit) ?? 0;
-        if (debit !== 0) {
-          payload.debit = debit;
-        }
-        if (credit !== 0) {
-          payload.credit = credit;
-        }
-        return payload;
       })
     }
   };
@@ -763,10 +796,268 @@ function buildJournalEntryRecord(
   return record;
 }
 
+async function syncStatisticalAccountsForWorkspace(
+  database: AppDatabase,
+  connectionService: NetSuiteConnectionService,
+  property: Record<string, unknown>,
+  attachment: SupportedAttachmentSummary,
+  mappings: Array<Record<string, unknown>>,
+  defaults: PostingDefaults
+): Promise<Record<string, unknown>> {
+  const propertySlug = String(property.property_slug || "");
+  const propertyName = String(property.property_name || propertySlug || "Property");
+  const assignments = createStatisticalAccountAssignments(propertyName, propertySlug, attachment, mappings);
+  const lookup = await connectionService.resolveStatisticalAccounts(
+    assignments.map((entry) => entry.accountNumber),
+    assignments.map((entry) => entry.externalId)
+  );
+  const takenNumbers = new Set<string>([
+    ...Object.keys(lookup.byAccountNumber),
+    ...assignments.map((entry) => entry.accountNumber).filter(Boolean)
+  ]);
+  const needsCreate = assignments.filter((entry) => !lookup.byExternalId[entry.externalId]);
+  const missingDefaults: string[] = [];
+  if (needsCreate.length > 0 && !defaults.subsidiaryId) {
+    missingDefaults.push("Subsidiary ID");
+  }
+  if (needsCreate.length > 0 && !defaults.unitsTypeId) {
+    missingDefaults.push("Units Type ID");
+  }
+  if (needsCreate.length > 0 && !defaults.unitId) {
+    missingDefaults.push("Default Unit");
+  }
+
+  let createdCount = 0;
+  let reusedCount = 0;
+  let errorCount = 0;
+  const persistedAt = new Date().toISOString();
+
+  for (const assignment of assignments) {
+    const existingByExternalId = lookup.byExternalId[assignment.externalId];
+    if (existingByExternalId) {
+      assignment.accountNumber = existingByExternalId.acctNumber || assignment.accountNumber;
+      assignment.accountName = existingByExternalId.acctName || assignment.accountName;
+      assignment.netsuiteAccountId = existingByExternalId.id;
+      assignment.accountSyncStatus = "synced";
+      assignment.lastSyncedAt = persistedAt;
+      assignment.lastSyncError = "";
+      reusedCount += 1;
+      takenNumbers.add(assignment.accountNumber);
+      continue;
+    }
+
+    if (missingDefaults.length > 0) {
+      assignment.accountSyncStatus = "error";
+      assignment.lastSyncError = `${missingDefaults.join(", ")} must be set before statistical accounts can be synchronized.`;
+      errorCount += 1;
+      continue;
+    }
+
+    while (true) {
+      const collision = lookup.byAccountNumber[assignment.accountNumber];
+      if (!collision || collision.externalId === assignment.externalId) {
+        break;
+      }
+
+      takenNumbers.add(assignment.accountNumber);
+      assignment.accountNumber = generateDeterministicStatisticalAccountNumber({
+        propertySlug,
+        reportType: attachment.reportType,
+        mappingKey: assignment.mappingKey,
+        takenNumbers
+      });
+    }
+
+    try {
+      const created = await connectionService.createStatisticalAccount(
+        buildStatisticalAccountRecord(assignment, defaults)
+      );
+      assignment.accountNumber = created.account.acctNumber || assignment.accountNumber;
+      assignment.accountName = created.account.acctName || assignment.accountName;
+      assignment.netsuiteAccountId = created.account.id;
+      assignment.accountSyncStatus = "synced";
+      assignment.lastSyncedAt = persistedAt;
+      assignment.lastSyncError = "";
+      lookup.byAccountNumber[assignment.accountNumber] = {
+        id: created.account.id,
+        acctNumber: assignment.accountNumber,
+        acctName: assignment.accountName,
+        externalId: assignment.externalId
+      };
+      lookup.byExternalId[assignment.externalId] = lookup.byAccountNumber[assignment.accountNumber];
+      takenNumbers.add(assignment.accountNumber);
+      createdCount += 1;
+    } catch (error) {
+      assignment.accountSyncStatus = "error";
+      assignment.lastSyncError = error instanceof Error ? error.message : String(error);
+      errorCount += 1;
+    }
+  }
+
+  database.upsertNetSuiteMonetaryMappings(assignments.map((entry) => buildPersistedMappingRecord(
+    propertySlug,
+    attachment.reportType,
+    attachment,
+    entry,
+    persistedAt
+  )));
+
+  const summary = errorCount > 0
+    ? `Statistical account sync completed with ${createdCount} created, ${reusedCount} reused, and ${errorCount} error(s).`
+    : `Statistical account sync completed with ${createdCount} created and ${reusedCount} reused.`;
+
+  return {
+    createdCount,
+    reusedCount,
+    errorCount,
+    message: summary
+  };
+}
+
+function createStatisticalAccountAssignments(
+  propertyName: string,
+  propertySlug: string,
+  attachment: SupportedAttachmentSummary,
+  mappings: Array<Record<string, unknown>>
+): StatisticalAccountAssignment[] {
+  const takenNumbers = new Set(
+    mappings
+      .map((entry) => normalizeWhitespace(entry.statisticalAccountNumber))
+      .filter(Boolean)
+  );
+
+  return mappings.map((mapping) => {
+    const mappingKey = String(mapping.mappingKey || "");
+    const savedNumber = normalizeWhitespace(mapping.statisticalAccountNumber);
+    const accountNumber = savedNumber || generateDeterministicStatisticalAccountNumber({
+      propertySlug,
+      reportType: attachment.reportType,
+      mappingKey,
+      takenNumbers
+    });
+    takenNumbers.add(accountNumber);
+
+    return {
+      mappingKey,
+      groupLabel: String(mapping.groupLabel || ""),
+      itemLabel: String(mapping.itemLabel || ""),
+      amountField: String(mapping.amountField || ""),
+      amountFieldLabel: String(mapping.amountFieldLabel || ""),
+      currentAmount: String(mapping.currentAmount || "0.00"),
+      currentAmountValue: typeof mapping.currentAmountValue === "number" ? mapping.currentAmountValue : parseAmount(mapping.currentAmount) ?? 0,
+      firstSeenAt: typeof mapping.firstSeenAt === "string" && mapping.firstSeenAt ? mapping.firstSeenAt : "",
+      lastSeenAt: typeof mapping.lastSeenAt === "string" && mapping.lastSeenAt ? mapping.lastSeenAt : "",
+      lastAttachmentId: typeof mapping.lastAttachmentId === "number" ? mapping.lastAttachmentId : null,
+      lastAttachmentName: typeof mapping.lastAttachmentName === "string" ? mapping.lastAttachmentName : "",
+      updatedAt: typeof mapping.updatedAt === "string" && mapping.updatedAt ? mapping.updatedAt : "",
+      accountNumber,
+      accountName: buildStatisticalAccountName(propertyName, attachment, mapping),
+      externalId: buildStatisticalAccountExternalId(propertySlug, attachment.reportType, mappingKey),
+      netsuiteAccountId: normalizeWhitespace(mapping.netsuiteAccountId),
+      accountSyncStatus: normalizeWhitespace(mapping.accountSyncStatus),
+      lastSyncedAt: normalizeWhitespace(mapping.lastSyncedAt),
+      lastSyncError: normalizeWhitespace(mapping.lastSyncError)
+    };
+  });
+}
+
+function buildPersistedMappingRecord(
+  propertySlug: string,
+  reportType: SupportedMonetaryReportType,
+  attachment: SupportedAttachmentSummary,
+  entry: StatisticalAccountAssignment,
+  updatedAt: string
+){
+  return {
+    propertySlug,
+    reportType,
+    mappingKey: entry.mappingKey,
+    groupLabel: entry.groupLabel,
+    itemLabel: entry.itemLabel,
+    amountField: entry.amountField,
+    amountFieldLabel: entry.amountFieldLabel,
+    defaultPostingPolarity: "debit_positive",
+    postingPolarity: "debit_positive",
+    netsuiteGlCode: "",
+    statisticalAccountNumber: entry.accountNumber,
+    statisticalAccountName: entry.accountName,
+    statisticalAccountExternalId: entry.externalId,
+    netsuiteAccountId: entry.netsuiteAccountId,
+    accountSyncStatus: entry.accountSyncStatus,
+    lastSyncedAt: entry.lastSyncedAt,
+    lastSyncError: entry.lastSyncError,
+    firstSeenAt: entry.firstSeenAt || updatedAt,
+    lastSeenAt: updatedAt,
+    lastAttachmentId: attachment.attachmentId,
+    lastAttachmentName: attachment.attachmentName,
+    updatedAt
+  };
+}
+
+function buildStatisticalAccountRecord(
+  assignment: StatisticalAccountAssignment,
+  defaults: PostingDefaults
+): Record<string, unknown> {
+  const record: Record<string, unknown> = {
+    acctType: { id: "Stat" },
+    acctNumber: assignment.accountNumber,
+    acctName: assignment.accountName,
+    externalId: assignment.externalId,
+    unitsType: { id: defaults.unitsTypeId },
+    unit: defaults.unitId,
+    subsidiary: {
+      items: [{ id: defaults.subsidiaryId }]
+    }
+  };
+
+  if (defaults.locationId) {
+    record.location = { id: defaults.locationId };
+  }
+  if (defaults.departmentId) {
+    record.department = { id: defaults.departmentId };
+  }
+  if (defaults.classId) {
+    record.class = { id: defaults.classId };
+  }
+
+  return record;
+}
+
+function buildStatisticalAccountExternalId(
+  propertySlug: string,
+  reportType: SupportedMonetaryReportType,
+  mappingKey: string
+): string {
+  return [
+    "synchrohrm",
+    "statacct",
+    sanitizeExternalIdPart(propertySlug) || "property",
+    sanitizeExternalIdPart(reportType) || "report",
+    sanitizeExternalIdPart(mappingKey) || "mapping"
+  ].join(":");
+}
+
+function buildStatisticalAccountName(
+  propertyName: string,
+  attachment: SupportedAttachmentSummary,
+  mapping: Record<string, unknown>
+): string {
+  const parts = [
+    propertyName,
+    attachment.reportTitle || REPORT_TITLES[attachment.reportType] || attachment.reportType,
+    String(mapping.itemLabel || mapping.groupLabel || mapping.mappingKey || "Stat")
+  ].map((part) => normalizeWhitespace(part)).filter(Boolean);
+  return parts.join(" ").slice(0, 31);
+}
+
 function discoverAllPostingItems(
   rows: Array<Record<string, unknown>>,
   attachment: SupportedAttachmentSummary
 ): DiscoveredMonetaryItem[] {
+  if (attachment.reportType === "choice_audit_packet_rows") {
+    return discoverChoiceAuditPacketItems(rows, attachment);
+  }
+
   if (attachment.reportType === "credit_card_transaction_rows") {
     return discoverCreditCardTransactionItems(rows, attachment);
   }
@@ -818,6 +1109,197 @@ function discoverGenericPostingItems(
   }
 
   return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
+function discoverChoiceAuditPacketItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const items = [
+    ...discoverChoiceHotelJournalSummaryItems(rows, attachment),
+    ...discoverChoiceHotelStatisticsItems(rows, attachment),
+    ...discoverChoiceRevenueByRateCodeItems(rows, attachment),
+    ...discoverChoiceFinalTransactionCloseoutItems(rows, attachment)
+  ];
+
+  return mergeDiscoveredItems(items);
+}
+
+function discoverChoiceHotelJournalSummaryItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const items: DiscoveredMonetaryItem[] = [];
+
+  for (const row of rows) {
+    if (normalizeWhitespace(row.report_name) !== "Hotel Journal Summary") {
+      continue;
+    }
+
+    const metric = extractChoiceMetricRow(row, 11);
+    if (!metric || /^Today's Total:?$/i.test(metric.label)) {
+      continue;
+    }
+
+    const amount = metric.values[3] ?? null;
+    if (amount === null) {
+      continue;
+    }
+
+    const itemLabel = buildChoiceCategoryLabel(metric.label, metric.code, attachment);
+    items.push({
+      mappingKey: buildMappingKey(attachment.reportType, "journal_total", ["hotel_journal_summary", itemLabel]),
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle,
+      groupLabel: "Hotel Journal Summary",
+      itemLabel,
+      amountField: "journal_total",
+      amountFieldLabel: "Journal Total",
+      defaultPostingPolarity: inferMetricPolarity("journal_total", "Hotel Journal Summary", itemLabel),
+      amount: roundMoney(amount)
+    });
+  }
+
+  return items;
+}
+
+function discoverChoiceHotelStatisticsItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const items: DiscoveredMonetaryItem[] = [];
+  let currentSection = "";
+
+  for (const row of rows) {
+    if (normalizeWhitespace(row.report_name) !== "Hotel Statistics") {
+      continue;
+    }
+
+    const sectionName = normalizeWhitespace(row.section) || inferChoiceHotelStatisticsSection(row.line_text);
+    if (sectionName) {
+      currentSection = sectionName;
+    }
+
+    const metric = extractChoiceMetricRow(row, 5);
+    if (!metric) {
+      continue;
+    }
+
+    const amount = metric.values[0] ?? null;
+    if (amount === null) {
+      continue;
+    }
+
+    const groupLabel = currentSection
+      ? `Hotel Statistics / ${currentSection}`
+      : "Hotel Statistics";
+    const itemLabel = metric.label;
+    items.push({
+      mappingKey: buildMappingKey(attachment.reportType, "current", ["hotel_statistics", groupLabel, itemLabel]),
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle,
+      groupLabel,
+      itemLabel,
+      amountField: "current",
+      amountFieldLabel: "Current",
+      defaultPostingPolarity: inferMetricPolarity("current", groupLabel, itemLabel),
+      amount: roundMoney(amount)
+    });
+  }
+
+  return items;
+}
+
+function discoverChoiceRevenueByRateCodeItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const items: DiscoveredMonetaryItem[] = [];
+
+  for (const row of rows) {
+    if (normalizeWhitespace(row.report_name) !== "Revenue by Rate Code") {
+      continue;
+    }
+
+    const metric = extractChoiceMetricRow(row, 15);
+    if (!metric || /^Total\b/i.test(metric.label)) {
+      continue;
+    }
+
+    const amount = metric.values[2] ?? null;
+    if (amount === null) {
+      continue;
+    }
+
+    const section = normalizeWhitespace(row.section);
+    const groupLabel = section
+      ? `Revenue by Rate Code / ${section}`
+      : "Revenue by Rate Code";
+    const itemLabel = metric.label;
+    items.push({
+      mappingKey: buildMappingKey(attachment.reportType, "daily_revenue", ["revenue_by_rate_code", groupLabel, itemLabel]),
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle,
+      groupLabel,
+      itemLabel,
+      amountField: "daily_revenue",
+      amountFieldLabel: "Daily Revenue",
+      defaultPostingPolarity: inferMetricPolarity("daily_revenue", groupLabel, itemLabel),
+      amount: roundMoney(amount)
+    });
+  }
+
+  return items;
+}
+
+function discoverChoiceFinalTransactionCloseoutItems(
+  rows: Array<Record<string, unknown>>,
+  attachment: SupportedAttachmentSummary
+): DiscoveredMonetaryItem[] {
+  const items: DiscoveredMonetaryItem[] = [];
+  let currentSection = "";
+
+  for (const row of rows) {
+    if (normalizeWhitespace(row.report_name) !== "Final Transaction Closeout") {
+      continue;
+    }
+
+    const section = normalizeWhitespace(row.section);
+    if (section) {
+      currentSection = section;
+    }
+
+    if (normalizeWhitespace(row.row_kind) !== "total") {
+      continue;
+    }
+
+    const metric = extractChoiceMetricRow(row, 6);
+    const amount = metric?.values[3] ?? parseAmount(row.value_4);
+    if (amount === null) {
+      continue;
+    }
+
+    const groupLabel = currentSection
+      ? `Final Transaction Closeout / ${currentSection}`
+      : "Final Transaction Closeout";
+    const itemLabel = metric?.label
+      || normalizeWhitespace(row.metric_name)
+      || normalizeWhitespace(row.line_text)
+      || "Section Total";
+    items.push({
+      mappingKey: buildMappingKey(attachment.reportType, "todays_net", ["final_transaction_closeout", groupLabel, itemLabel]),
+      reportType: attachment.reportType,
+      reportTitle: attachment.reportTitle,
+      groupLabel,
+      itemLabel,
+      amountField: "todays_net",
+      amountFieldLabel: "Today's Net",
+      defaultPostingPolarity: inferMetricPolarity("todays_net", groupLabel, itemLabel),
+      amount: roundMoney(amount)
+    });
+  }
+
+  return items;
 }
 
 function discoverCreditCardTransactionItems(
@@ -1132,6 +1614,126 @@ function buildBestWesternDailyCategoryLabel(
   return category || attachment.attachmentName || attachment.reportTitle || "Daily Report Category";
 }
 
+function extractChoiceMetricRow(
+  row: Record<string, unknown>,
+  maxValues: number
+): { label: string; code: string; values: Array<number | null> } | null {
+  const populatedValues = Array.from({ length: maxValues }, (_, index) => parseAmount(row[`value_${index + 1}`]));
+  const hasStructuredValues = populatedValues.some((value) => value !== null);
+  if (hasStructuredValues) {
+    const labelSource = normalizeWhitespace(row.metric_name)
+      || normalizeWhitespace(row.transaction_description)
+      || normalizeWhitespace(row.rate_code)
+      || normalizeWhitespace(row.line_text);
+    if (!labelSource) {
+      return null;
+    }
+    const split = splitChoiceMetricLabel(labelSource);
+    return {
+      label: split.label,
+      code: split.code,
+      values: populatedValues
+    };
+  }
+
+  const parsed = extractChoiceFlexibleMetricText(normalizeWhitespace(row.line_text), maxValues);
+  if (!parsed) {
+    return null;
+  }
+
+  const split = splitChoiceMetricLabel(parsed.label);
+  return {
+    label: split.label,
+    code: split.code,
+    values: parsed.values
+  };
+}
+
+function extractChoiceFlexibleMetricText(
+  text: string,
+  maxValues: number
+): { label: string; values: number[] } | null {
+  if (!text) {
+    return null;
+  }
+
+  const normalized = text.replace(/(\d)\s+%/g, "$1%");
+  const tokenPattern = /(^|\s)(\(?-?(?:USD|\$)?\d[\d,]*(?:\.\d+)?\)?-?%?)/g;
+  const tokens = Array.from(normalized.matchAll(tokenPattern)).map((match) => ({
+    index: (match.index ?? 0) + match[1].length,
+    value: match[2]
+  }));
+  if (tokens.length === 0 || tokens.length > maxValues) {
+    return null;
+  }
+
+  const label = normalizeWhitespace(normalized.slice(0, tokens[0].index));
+  if (!label) {
+    return null;
+  }
+
+  const values = tokens
+    .map((token) => parseAmount(token.value))
+    .filter((value): value is number => value !== null);
+  return values.length > 0 ? { label, values } : null;
+}
+
+function splitChoiceMetricLabel(value: string): { label: string; code: string } {
+  const normalized = normalizeWhitespace(value);
+  const stripped = normalized.replace(/^Transaction (?:Type|Code):\s*/i, "");
+  const match = stripped.match(/^(.*?)(?:\s*\(([A-Za-z0-9/-]+)\))?$/);
+  return {
+    label: normalizeWhitespace(match?.[1] ?? stripped),
+    code: normalizeWhitespace(match?.[2] ?? "")
+  };
+}
+
+function buildChoiceCategoryLabel(label: string, code: string, attachment: SupportedAttachmentSummary): string {
+  return normalizeWhitespace(label)
+    || normalizeWhitespace(code)
+    || attachment.reportTitle
+    || "Daily Audit Packet";
+}
+
+function inferChoiceHotelStatisticsSection(value: unknown): string {
+  const text = normalizeWhitespace(value);
+  if (!text) {
+    return "";
+  }
+
+  for (const prefix of [
+    "Room Statistics",
+    "Performance Statistics",
+    "Revenue",
+    "Guest Statistics"
+  ]) {
+    if (text.startsWith(prefix)) {
+      return prefix;
+    }
+  }
+
+  return "";
+}
+
+function mergeDiscoveredItems(items: DiscoveredMonetaryItem[]): DiscoveredMonetaryItem[] {
+  const byKey = new Map<string, DiscoveredMonetaryItem>();
+
+  for (const item of items) {
+    const existing = byKey.get(item.mappingKey);
+    if (existing) {
+      existing.amount = roundMoney(existing.amount + item.amount);
+      continue;
+    }
+
+    byKey.set(item.mappingKey, {
+      ...item,
+      amount: roundMoney(item.amount)
+    });
+  }
+
+  return Array.from(byKey.values()).sort(compareDiscoveredItems);
+}
+
 function buildPostingItemCandidates(
   row: Record<string, unknown>,
   attachment: SupportedAttachmentSummary
@@ -1274,36 +1876,6 @@ function shouldTreatAsMetricField(field: string): boolean {
   }
 
   return true;
-}
-
-function buildPostingLine(
-  baseLine: Omit<PostingPreviewLine, "rawAmount" | "debit" | "credit">,
-  amount: number
-): PostingPreviewLine {
-  const roundedAmount = roundMoney(amount);
-  const normalizedPolarity = baseLine.postingPolarity === "credit_positive" ? "credit_positive" : "debit_positive";
-  let debit = 0;
-  let credit = 0;
-
-  if (normalizedPolarity === "credit_positive") {
-    if (roundedAmount >= 0) {
-      credit = roundedAmount;
-    } else {
-      debit = Math.abs(roundedAmount);
-    }
-  } else if (roundedAmount >= 0) {
-    debit = roundedAmount;
-  } else {
-    credit = Math.abs(roundedAmount);
-  }
-
-  return {
-    ...baseLine,
-    postingPolarity: normalizedPolarity,
-    rawAmount: formatMoney(roundedAmount),
-    debit: formatMoney(debit),
-    credit: formatMoney(credit)
-  };
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {

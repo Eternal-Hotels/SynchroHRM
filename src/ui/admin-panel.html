@@ -134,7 +134,7 @@
             <div>
               <div class="eyebrow muted">Accounting</div>
               <h2>NetSuite Statistical GL Workspace</h2>
-              <p class="subhead">Choose a property, pick a parsed report family, map grouped statistical categories to GL codes, then build a preview for NetSuite.</p>
+              <p class="subhead">Choose a property, pick a parsed report family, synchronize property-scoped statistical accounts, then build and submit a statistical journal preview to NetSuite.</p>
             </div>
             <div class="badge">Phase 1: Statistical categories</div>
           </div>
@@ -143,7 +143,7 @@
               <div class="modal-section-head">
                 <div>
                   <h3>Properties</h3>
-                  <p class="subhead">Only properties with parsed report families appear here.</p>
+                  <p class="subhead">Properties with parsed report attachments appear here while parser coverage keeps expanding.</p>
                 </div>
               </div>
               <div id="netsuite-property-status" class="form-status empty">Loading NetSuite properties...</div>
@@ -154,7 +154,7 @@
               <div class="modal-section-head">
                 <div>
                   <h3>Posting Workspace</h3>
-                  <p class="subhead">This workspace now groups parsed hotel reports into posting categories instead of asking for one GL code per raw line.</p>
+                  <p class="subhead">This workspace groups parsed report families into statistical categories and auto-generates deterministic account numbers for NetSuite statistical accounts.</p>
                 </div>
               </div>
               <div id="netsuite-workspace-empty" class="empty">Select a property to load its NetSuite posting workspace.</div>
@@ -173,10 +173,6 @@
                   <label class="form-field">
                     <span>External ID prefix</span>
                     <input id="netsuite-posting-external-prefix" type="text" placeholder="Defaults to the property slug">
-                  </label>
-                  <label class="form-field">
-                    <span>Balancing GL code (disabled)</span>
-                    <input id="netsuite-posting-balancing-gl" type="text" placeholder="Balancing is currently disabled for the statistical workflow" disabled>
                   </label>
                   <label class="form-field">
                     <span>Memo template</span>
@@ -202,15 +198,24 @@
                     <span>Class ID</span>
                     <input id="netsuite-posting-class-id" type="text" placeholder="Optional NetSuite internal ID">
                   </label>
+                  <label class="form-field">
+                    <span>Units Type ID</span>
+                    <input id="netsuite-posting-units-type-id" type="text" placeholder="Required to create statistical accounts">
+                  </label>
+                  <label class="form-field">
+                    <span>Default Unit</span>
+                    <input id="netsuite-posting-unit-id" type="text" placeholder="Required base unit for statistical accounts">
+                  </label>
                   <div class="toolbar-row">
                     <button id="netsuite-posting-refresh-button" class="secondary" type="button">Refresh Discovery</button>
                     <button id="netsuite-posting-save-button" class="secondary" type="submit">Save Setup</button>
+                    <button id="netsuite-posting-sync-button" class="secondary" type="button">Sync Statistical Accounts</button>
                     <button id="netsuite-posting-preview-button" class="primary" type="button">Build Preview</button>
-                    <button id="netsuite-posting-submit-button" class="primary" type="button">Submit To NetSuite</button>
+                    <button id="netsuite-posting-submit-button" class="primary" type="button">Submit Statistical Journal</button>
                   </div>
                 </form>
 
-                <div id="netsuite-posting-status" class="form-status empty">No NetSuite posting actions yet.</div>
+                <div id="netsuite-posting-status" class="form-status empty">No NetSuite statistical actions yet.</div>
                 <div id="netsuite-posting-mapping-summary" class="notes-block empty">No grouped statistical categories loaded yet.</div>
                 <div id="netsuite-posting-mappings" class="report-table-wrap"></div>
                 <div id="netsuite-posting-preview" class="report-body"></div>

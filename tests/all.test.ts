@@ -4,6 +4,7 @@ import "./auth-routes.test.js";
 import "./ingest-routes.test.js";
 import "./workbook-parser.test.js";
 import "./netsuite-client.test.js";
+import "./netsuite-statistical-account-number.test.js";
 import "./netsuite-catalog-export.test.js";
 import "./netsuite-routes.test.js";
 import "./netsuite-ui-smoke.test.js";

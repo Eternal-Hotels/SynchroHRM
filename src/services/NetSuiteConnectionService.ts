@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AppDatabase } from "../db/Database.js";
 import { NetSuiteClient, NetSuiteRequestError } from "../netsuite/NetSuiteClient.js";
 import {
+  type NetSuiteAccountLookupRecord,
   NETSUITE_JWT_ALGORITHMS,
   type NetSuiteCatalogExportResult,
   type NetSuiteConnectionSettings,
@@ -11,6 +12,8 @@ import {
   type NetSuiteConnectionUpdateInput,
   type NetSuiteConnectionView,
   type NetSuiteJournalEntryResult,
+  type NetSuiteStatisticalAccountResult,
+  type NetSuiteStatisticalJournalEntryResult,
   type NetSuiteJwtAlgorithm
 } from "../netsuite/types.js";
 import { formatRunStamp } from "../utils/dates.js";
@@ -198,6 +201,28 @@ export class NetSuiteConnectionService {
   async createJournalEntry(journalRecord: Record<string, unknown>): Promise<NetSuiteJournalEntryResult> {
     const { settings, privateKeyPem } = this.getOperationalConnection("journal entries can be submitted");
     return this.client.createJournalEntry(settings, privateKeyPem, journalRecord);
+  }
+
+  async resolveStatisticalAccounts(
+    accountNumbers: string[],
+    externalIds: string[]
+  ): Promise<{
+    byAccountNumber: Record<string, NetSuiteAccountLookupRecord>;
+    byExternalId: Record<string, NetSuiteAccountLookupRecord>;
+    raw: Record<string, unknown> | null;
+  }> {
+    const { settings, privateKeyPem } = this.getOperationalConnection("statistical accounts can be resolved");
+    return this.client.resolveStatisticalAccounts(settings, privateKeyPem, accountNumbers, externalIds);
+  }
+
+  async createStatisticalAccount(accountRecord: Record<string, unknown>): Promise<NetSuiteStatisticalAccountResult> {
+    const { settings, privateKeyPem } = this.getOperationalConnection("statistical accounts can be created");
+    return this.client.createStatisticalAccount(settings, privateKeyPem, accountRecord);
+  }
+
+  async createStatisticalJournalEntry(journalRecord: Record<string, unknown>): Promise<NetSuiteStatisticalJournalEntryResult> {
+    const { settings, privateKeyPem } = this.getOperationalConnection("statistical journal entries can be submitted");
+    return this.client.createStatisticalJournalEntry(settings, privateKeyPem, journalRecord);
   }
 
   getLatestMetadataCatalogDownload():
